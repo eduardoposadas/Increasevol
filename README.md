@@ -26,7 +26,7 @@ to get the duration of the video. The second one is to launch the command:
 ```
 ffmpeg -i input.mkv -acodec mp3 -filter:a volume=3 -vcodec copy output.mkv
 ```
-which increases the audio volume of the input file. While ffmpeg is processing the video it displays on the standard output lines like:
+which increases the audio volume of the input file. While ffmpeg is processing the video it displays on its standard output lines like:
 ```
 frame=12526 fps=695 q=31.0 size= 22272kB time=00:07:08.12 bitrate= 363.9kbits/s speed=27.8x
 ```
@@ -37,7 +37,7 @@ Each ffmpeg process is launched using a class derived from the `ProcessLauncher`
 The application launches as many concurrent jobs as specified in the configuration. This is handled by the `JobsQueue` class.
 
 ## Portability
-**The application only works on Linux**. I don't want to bother porting it to other operating systems that I don't use. However, there are several lines marked with:
+**The application only works on Linux**. I don't want to bother porting it to other operating systems that I don't use. However, if anyone is interested, there are several lines marked with:
 ```
 # FIXME: This is not portable.
 ```
@@ -51,7 +51,12 @@ self._data_stream.read_upto_async(stop_chars='\r\n', # FIXME: This is not portab
 ```
 
 ## Installation
-It has been tested only on Ubuntu 22.04, but it should run on any current Linux distribution without installing anything. Just copy the [file](increasevol.py), give it run permissions and run it.
+It has been tested only on Ubuntu 22.04, but it should run on any current Linux distribution.
+
+In Ubuntu just copy the Python code [file](increasevol.py), give it run permissions and run it. Of course, it is necessary to have ffmpeg and ffprobe installed. Just run the following command in a terminal:
+```
+sudo apt install ffmpeg
+```
 For other distributions you can check that they meet the [requirements](https://pygobject.readthedocs.io/en/latest/getting_started.html ) for running applications made with PyGObject. In Ubuntu 22.04 it is enough to have installed:
 ```
 python3-gi python3-gi-cairo gir1.2-gtk-3.0
