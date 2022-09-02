@@ -15,8 +15,8 @@ Increasevol is a toy project to improve my Python skills. I was tired of having 
 
 The application displays three panels:
 - the right pane is a Gtk.PlacesSidebar widget. This gives the application the appearance of a file manager.
-- the middle pane is a Gtk.IconView widget that displays the list of files in the current directory. Each file is displayed as an icon depending on its MIME type. This code is a modification of one of the GTK 3 examples.
-- the left pane is a Gtk.TreeView that displays the list of launched or waiting jobs. Each job is in charge of increasing the volume of a video, i.e. each job is a running or waiting ffmpeg process. This code is also a modification of one of the GTK 3 examples.
+- the middle pane is a Gtk.IconView widget that displays the list of files in the current directory. Each file is displayed as an icon depending on its MIME type. This code is a modification of one of the GTK 3 demo [examples](https://gitlab.gnome.org/GNOME/pygobject/-/blob/master/examples/demo/demos/IconView/iconviewbasics.py).
+- the left pane is a Gtk.TreeView that displays the list of launched or waiting jobs. Each job is in charge of increasing the volume of a video, i.e. each job is a running or waiting ffmpeg process. This code is also a modification of one of the GTK 3 demo [examples](https://gitlab.gnome.org/GNOME/pygobject/-/blob/master/examples/demo/demos/TreeView/liststore.py).
 
 Each job performs two steps, as can be seen in the `Job` class. The first one is to launch the command:
 ```
