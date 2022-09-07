@@ -554,8 +554,9 @@ class JobStatus(Enum):
 
 
 # Icon showed in JobsListWidget for every job state
+# https://gitlab.gnome.org/GNOME/adwaita-icon-theme/-/tree/master/Adwaita
 job_status_pixbuf = {
-    JobStatus.QUEUED: 'radio-mixed-symbolic',
+    JobStatus.QUEUED: 'document-open-recent-symbolic',
     JobStatus.RUNNING: 'emblem-system-symbolic',
     JobStatus.FAILED: 'computer-fail-symbolic',
     JobStatus.FINISHED: 'emblem-ok-symbolic'
@@ -1218,6 +1219,10 @@ MENU_XML = """
     </section>
     <section>
       <item>
+        <attribute name="action">app.about</attribute>
+        <attribute name="label" translatable="yes">_About</attribute>
+      </item>
+      <item>
         <attribute name="action">app.quit</attribute>
         <attribute name="label" translatable="yes">_Quit</attribute>
         <attribute name="accel">&lt;Primary&gt;q</attribute>
@@ -1263,6 +1268,15 @@ class AppWindow(Gtk.ApplicationWindow):
         self.add_action(file_exp_single_click_action)
 
         # Build main window
+        menubutton = Gtk.MenuButton(direction=Gtk.ArrowType.NONE)
+        builder = Gtk.Builder.new_from_string(MENU_XML, -1)
+        menubutton.set_menu_model(builder.get_object("app-menu"))
+
+        headerbar = Gtk.HeaderBar(title='Increase video audio volume with ffmpeg')
+        headerbar.set_show_close_button(True)
+        headerbar.pack_start(menubutton)
+        self.set_titlebar(headerbar)
+
         self._places = Gtk.PlacesSidebar()
         self.file_exp = FileExplorer()
         self._jobsListWidget = JobsListWidget()
@@ -1319,12 +1333,14 @@ class Application(Gtk.Application):
 
     def do_startup(self):
         Gtk.Application.do_startup(self)
-        builder = Gtk.Builder.new_from_string(MENU_XML, -1)
-        self.set_app_menu(builder.get_object("app-menu"))
 
         preferences_action = Gio.SimpleAction.new("preferences", None)
         preferences_action.connect("activate", self._on_preferences)
         self.add_action(preferences_action)
+
+        about_action = Gio.SimpleAction.new("about", None)
+        about_action.connect("activate", self._on_about)
+        self.add_action(about_action)
 
         quit_action = Gio.SimpleAction.new("quit", None)
         quit_action.connect("activate", self._on_quit)
@@ -1332,7 +1348,7 @@ class Application(Gtk.Application):
 
     def do_activate(self):
         if not self.window:
-            self.window = AppWindow(application=self, title='Subir volumen con ffmpeg')
+            self.window = AppWindow(application=self)
         self.window.show_all()
         self.window.present()
 
@@ -1374,6 +1390,31 @@ class Application(Gtk.Application):
             dialog.run()
 
         Gtk.Application.do_shutdown(self)
+
+    def _on_about(self, _action, _param):
+        about_dialog = Gtk.AboutDialog(transient_for=self.window, modal=True)
+        about_dialog.set_title('About')
+        about_dialog.set_program_name('increasevol')
+        about_dialog.set_comments('Increase video audio volume with ffmpeg')
+        about_dialog.set_website('https://github.com/eduardoposadas/increasevol')
+        about_dialog.set_website_label('Source Code at  GitHub')
+        # about_dialog.set_logo(None)
+        about_dialog.set_logo_icon_name(None)
+        # about_dialog.set_logo_icon_name("bulky")
+
+        try:
+            h = open('/usr/share/common-licenses/GPL', encoding="utf-8")
+            s = h.readlines()
+            gpl = ""
+            for line in s:
+                gpl += line
+            h.close()
+            about_dialog.set_license(gpl)
+        except Exception as e:
+            print(e)
+
+        about_dialog.connect('response', lambda w, res: w.destroy())
+        about_dialog.present()
 
     def _on_quit(self, _action, _param):
         self.quit()
