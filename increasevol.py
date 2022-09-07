@@ -1397,10 +1397,8 @@ class Application(Gtk.Application):
         about_dialog.set_program_name('increasevol')
         about_dialog.set_comments('Increase video audio volume with ffmpeg')
         about_dialog.set_website('https://github.com/eduardoposadas/increasevol')
-        about_dialog.set_website_label('Source Code at  GitHub')
-        # about_dialog.set_logo(None)
+        about_dialog.set_website_label('Source Code at GitHub')
         about_dialog.set_logo_icon_name(None)
-        # about_dialog.set_logo_icon_name("bulky")
 
         try:
             h = open('/usr/share/common-licenses/GPL', encoding="utf-8")
