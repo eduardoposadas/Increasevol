@@ -1401,12 +1401,12 @@ class Application(Gtk.Application):
         about_dialog.set_logo_icon_name(None)
 
         try:
-            h = open('/usr/share/common-licenses/GPL', encoding="utf-8")
-            s = h.readlines()
             gpl = ""
-            for line in s:
-                gpl += line
-            h.close()
+            with open('/usr/share/common-licenses/GPL-3', encoding="utf-8") as h:
+                s = h.readlines()
+                for line in s:
+                    gpl += line
+
             about_dialog.set_license(gpl)
         except Exception as e:
             print(e)
