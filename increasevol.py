@@ -680,26 +680,30 @@ class Job(GObject.GObject):
             # config.keep_original == False
             try:
                 os.remove(self._file_name)
+            except Exception as e:
+                self._manage_error(None, f'Error removing "{self._file_name}"\n'
+                                         f'Preserving temporal output file:\n'
+                                         f'"{self._tempOutput}"\n\n'
+                                         f'{str(e)}')
+            else:
                 try:
                     os.rename(self._tempOutput, self._file_name)
                 except Exception as e:
                     self._manage_error(None, f'Error renaming "{self._tempOutput}" to\n'
                                              f'"{self._file_name}":\n\n'
                                              f'{str(e)}')
-            except Exception as e:
-                self._manage_error(None, f'Error removing "{self._file_name}"\n'
-                                         f'Preserving temporal output file:\n'
-                                         f'"{self._tempOutput}"\n\n'
-                                         f'{str(e)}')
-            finally:
-                self.emit('job_finished', self._file_name)
+                finally:
+                    self.emit('job_finished', self._file_name)
 
     def _manage_error(self, _object, error: str):
         self._model[self._list_row][JOB_LIST_COLUMN_STATUS] = job_status_pixbuf[JobStatus.FAILED]
         self._model[self._list_row][JOB_LIST_COLUMN_ESTTIME] = '--:--:--'
 
         if self._tempOutput is not None and os.path.exists(self._tempOutput):
-            os.remove(self._tempOutput)
+            try:
+                os.remove(self._tempOutput)
+            except:
+                pass
         self.emit('job_finished_with_error', self._file_name, error)
 
 
