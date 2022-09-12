@@ -42,15 +42,16 @@ from gi.repository import GObject, GLib, Gio, GdkPixbuf, Pango, Gdk, Gtk
 
 
 class Configuration:
+    """Set default configuration values and load configuration file values."""
+
     def __init__(self):
-        # Default configuration values
         self._video_extensions = ('mp4', 'avi', 'mkv')
         self._volume_increase = 3
         self._keep_original = False
-        self._output_prefix = ''  # Only if _keep_original == True
-        self._output_suffix = '_Vol-inc'  # Only if _keep_original == True
+        self._output_prefix = ''  # Only used if _keep_original == True
+        self._output_suffix = '_Vol-inc'  # Only used if _keep_original == True
         self._use_all_cpus = True
-        self._max_jobs = os.cpu_count()  # Only if _use_all_cpus == False
+        self._max_jobs = os.cpu_count()  # Only used if _use_all_cpus == False
         self._file_expl_show_hidden_files = False
         self._file_expl_case_insensitive_sort = True
         self._file_expl_activate_on_single_click = True
@@ -258,10 +259,13 @@ class Configuration:
         self._win_height = val
 
 
-# The central panel is a file explorer.
-# Copied from:
-# https://github.com/GNOME/pygobject/blob/master/examples/demo/demos/IconView/iconviewbasics.py
 class FileExplorer(Gtk.VBox):
+    """
+    The central panel of the main window is a file explorer.
+    Copied from:
+    https://github.com/GNOME/pygobject/blob/master/examples/demo/demos/IconView/iconviewbasics.py
+    """
+
     (COL_PATH,
      COL_DISPLAY_NAME,
      COL_PIXBUF,
@@ -532,8 +536,8 @@ class FileExplorer(Gtk.VBox):
 
         return pixbuf
 
-    # Used in AppWindow
     def fill_store(self):
+        """Refresh the panel content. It is used in AppWindow"""
         self._store.clear()
         for name in os.listdir(self._parent_dir):
             if config.file_expl_show_hidden_files or not name.startswith('.'):  # FIXME: This is not portable.
@@ -543,17 +547,16 @@ class FileExplorer(Gtk.VBox):
                 self._store.append([path, name, pixbuf, is_dir])
 
 
-# Job statuses
-# Used in Job and JobsQueue
 @unique
 class JobStatus(Enum):
+    """Job statuses. It is used in Job and JobsQueue."""
     RUNNING = 1,
     QUEUED = 2,
     FAILED = 3,
     FINISHED = 4
 
 
-# Icon showed in JobsListWidget for every job state
+# Icon displayed in JobsListWidget for each job status. Assumes Adwaita theme:
 # https://gitlab.gnome.org/GNOME/adwaita-icon-theme/-/tree/master/Adwaita
 job_status_pixbuf = {
     JobStatus.QUEUED: 'document-open-recent-symbolic',
@@ -571,15 +574,14 @@ job_status_pixbuf = {
  JOB_LIST_NUM_COLUMNS) = range(5)
 
 
-#
-# Job
-# There is a Job instance for every job showed in JobsListWidget.
-# It is responsible for executing the ffprobe and ffmpeg commands.
-# Ffprobe returns the duration of the video in seconds.
-# Ffmpeg increases the audio volume of the video. For every ffmpeg
-# output line, this class update the job state showed in JobsListWidget.
-
 class Job(GObject.GObject):
+    """
+    There is a Job instance for every job showed in JobsListWidget.
+    It is responsible for executing the ffprobe and ffmpeg commands:
+     - ffprobe returns the duration of the video in seconds.
+     - ffmpeg increases the audio volume of the video. For every ffmpeg
+       output line, this class update the job state showed in JobsListWidget.
+    """
 
     @GObject.Signal(arg_types=(str,))
     def job_finished(self, path):
@@ -607,16 +609,16 @@ class Job(GObject.GObject):
         self._model[self._list_row][JOB_LIST_COLUMN_PROGRESS] = 0
         self._model[self._list_row][JOB_LIST_COLUMN_ESTTIME] = ''
 
-    # Launch ffprobe to get video duration
     def get_duration(self):
+        """Launch ffprobe to get video duration. This method is the first step of the chain."""
         self._model[self._list_row][JOB_LIST_COLUMN_STATUS] = job_status_pixbuf[JobStatus.RUNNING]
         ffprobe = FfprobeLauncher(self._file_name)
         ffprobe.connect('finished', self._increase_volume)
         ffprobe.connect('finished_with_error', self._manage_error)
         GLib.idle_add(ffprobe.run)
 
-    # Launch ffmpeg to increase the volume
     def _increase_volume(self, _object, duration: float):
+        """Launch ffmpeg to increase the volume."""
         self._duration = duration
         if self._duration == 0:
             self._manage_error(None, "Error executing ffprobe. Can't get video's duration.")
@@ -701,13 +703,12 @@ class Job(GObject.GObject):
         self.emit('job_finished_with_error', self._file_name, error)
 
 
-#
-# JobsQueue
-# Class instantiated in main. Controls the number of jobs running at
-# once based on config.max_jobs. If a job ends with error shows a
-# window with the error text.
-
 class JobsQueue:
+    """
+    Class instantiated in main. Controls the number of jobs running at
+    once based on config.max_jobs. If a job ends with error shows a
+    window with the error text.
+    """
     def __init__(self):
         self._model = None
         self._n_running_jobs = 0
@@ -781,10 +782,13 @@ class JobsQueue:
         dialog.connect('response', lambda *d: dialog.destroy())
 
 
-# The right panel is a jobs list made with Gtk.TreeView.
-# Modified from:
-# https://github.com/GNOME/pygobject/blob/master/examples/demo/demos/TreeView/liststore.py
 class JobsListWidget(Gtk.ScrolledWindow):
+    """
+    The right panel is a jobs list made with Gtk.TreeView.
+    Modified from:
+    https://github.com/GNOME/pygobject/blob/master/examples/demo/demos/TreeView/liststore.py
+    """
+
     def __init__(self):
         super().__init__()
 
@@ -861,30 +865,28 @@ class JobsListWidget(Gtk.ScrolledWindow):
         treeview.append_column(column)
 
 
-# ProcessLauncher
-# Modified from:
-# https://gist.github.com/fthiery/da43365ceeefff8a9e3d0dd83ec24af9
-# This class is not used. Instead, the child classes FfprobeLauncher and
-# FfmpegLauncher are used.
-# To use the ProcessLauncher class it is necessary to create a derived class
-# and override at least the methods __init__, for_each_line, at_finalization
-# and at_finalization_with_error.
-#
-# The super().__init__(command) call in the derived class must include the
-# command executed, like super().__init__('/bin/ls').
-# The for_each_line method is called for each line of the command output. The
-# end of the line character set is specified in the read_upto_async call of
-# the _queue_read method. In the current implementation the end of line
-# character list is '\r\n' which is the correct one for ffmpeg output on Linux
-# For a common Linux command the '\n' character should be sufficient.
-#
-# The at_finalization and at_finalization_with_error methods are called when
-# the command is over without error and with error respectively
-
-priority = GLib.PRIORITY_DEFAULT
-
-
 class ProcessLauncher(GObject.GObject):
+    """
+    Process launcher with async IO.
+    Modified from:
+    https://gist.github.com/fthiery/da43365ceeefff8a9e3d0dd83ec24af9
+    This class is not used. Instead, the child classes FfprobeLauncher and
+    FfmpegLauncher are used.
+    To use the ProcessLauncher class it is necessary to create a derived class
+    and override at least the methods __init__, for_each_line, at_finalization
+    and at_finalization_with_error.
+
+    The super().__init__(command) call in the derived class must include the
+    command executed, like super().__init__('/bin/ls').
+    The for_each_line method is called for each line of the command output. The
+    end of the line character set is specified in the read_upto_async call of
+    the _queue_read method. In the current implementation the end of line
+    character list is '\r\n' which is the correct one for ffmpeg output on Linux
+    For a common Linux command the '\n' character should be sufficient.
+
+    The at_finalization and at_finalization_with_error methods are called when
+    the command is over without error and with error respectively
+    """
     def __init__(self, cmd: str = None):
         super().__init__()
 
@@ -920,7 +922,7 @@ class ProcessLauncher(GObject.GObject):
         self._data_stream.read_upto_async(
             stop_chars='\r\n',  # FIXME: This is not portable.
             stop_chars_len=2,
-            io_priority=priority,
+            io_priority=GLib.PRIORITY_DEFAULT,
             cancellable=self._cancellable,
             callback=self._on_data
         )
@@ -1055,10 +1057,9 @@ class FfmpegLauncher(ProcessLauncher):
         self.emit('finished_with_error', error)
 
 
-#
-# Preferences window
-#
 class Preferences(Gtk.Window):
+    """Preferences window."""
+
     def __init__(self):
         super().__init__()
         self._changed_values = False
@@ -1188,10 +1189,7 @@ class Preferences(Gtk.Window):
         self.destroy()
 
 
-#
-# Main Window
-#
-
+# This XML is here to avoid another file. This is a "one file application" with no installation instructions.
 MENU_XML = """
 <?xml version="1.0" encoding="UTF-8"?>
 <interface>
@@ -1422,6 +1420,7 @@ class Application(Gtk.Application):
 
 
 def check_prerequisites():
+    """Check commands in config.required_cmd tuple are in PATH."""
     error = False
     error_str = ''
     for cmd in config.required_cmd:
