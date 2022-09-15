@@ -20,11 +20,11 @@ The application displays three panels:
 
 Each job performs two steps, as can be seen in the `Job` class. The first one is to launch the command:
 ```
-ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 video.mkv
+ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 input_video.mkv
 ```
 to get the duration of the video. The second one is to launch the command:
 ```
-ffmpeg -i input.mkv -acodec mp3 -filter:a volume=3 -vcodec copy output.mkv
+ffmpeg -i input_video.mkv -acodec mp3 -filter:a volume=3 -vcodec copy output_video.mkv
 ```
 which increases the audio volume of the input file. While ffmpeg is processing the video it displays on its standard output lines like:
 ```
