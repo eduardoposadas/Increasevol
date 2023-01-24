@@ -83,7 +83,7 @@ class Configuration:
                 self._video_extensions = tmp_tuple
 
         self._cwd = temp_conf.get('DEFAULT', 'directory', fallback=self._cwd)
-        self._volume_increase = temp_conf.getint('DEFAULT', 'volume_increase', fallback=self._volume_increase)
+        self._volume_increase = temp_conf.getfloat('DEFAULT', 'volume_increase', fallback=self._volume_increase)
         self._keep_original = temp_conf.getboolean('DEFAULT', 'keep_original', fallback=self._keep_original)
         self._output_prefix = temp_conf.get('DEFAULT', 'output_prefix', fallback=self._output_prefix)
         self._output_suffix = temp_conf.get('DEFAULT', 'output_suffix', fallback=self._output_suffix)
@@ -135,7 +135,7 @@ class Configuration:
         return self._volume_increase
 
     @volume_increase.setter
-    def volume_increase(self, val: int):
+    def volume_increase(self, val: float):
         self._volume_increase = val
 
     @property
@@ -602,6 +602,11 @@ class Job(GObject.GObject):
         self._duration = 0
         self._start_time = 0
         self._tempOutput = None
+        self._volume_increase = config.volume_increase
+        self._keep_original = config.keep_original
+        self._output_prefix = config.output_prefix
+        self._output_suffix = config.output_suffix
+        self._temp_file_prefix = config.temp_file_prefix
 
         # Update the jobs list widget
         self._model[self._list_row][JOB_LIST_COLUMN_FILENAME] = self._file_name
@@ -630,7 +635,7 @@ class Job(GObject.GObject):
         try:
             handle, self._tempOutput = tempfile.mkstemp(dir=directory,
                                                         suffix=suffix,
-                                                        prefix=config.temp_file_prefix)
+                                                        prefix=self._temp_file_prefix)
         except Exception as e:
             self._manage_error(None, 'Error creating temporal file:\n' + str(e))
             return
@@ -639,7 +644,7 @@ class Job(GObject.GObject):
 
         self._start_time = time.time()
 
-        ffmpeg = FfmpegLauncher(self._file_name, self._tempOutput, self._duration)
+        ffmpeg = FfmpegLauncher(self._file_name, self._tempOutput, self._volume_increase, self._duration)
         ffmpeg.connect('update_state', self._update_conversion_state)
         ffmpeg.connect('finished', self._conversion_finished)
         ffmpeg.connect('finished_with_error', self._manage_error)
@@ -663,10 +668,10 @@ class Job(GObject.GObject):
         self._model[self._list_row][JOB_LIST_COLUMN_PROGRESS] = 100
         self._model[self._list_row][JOB_LIST_COLUMN_ESTTIME] = ''
 
-        if config.keep_original:
+        if self._keep_original:
             directory, name = os.path.split(self._file_name)
             name, ext = os.path.splitext(name)
-            name = directory + os.sep + config.output_prefix + name + config.output_suffix + ext
+            name = directory + os.sep + self._output_prefix + name + self._output_suffix + ext
             if os.path.exists(name):
                 self._manage_error(None, f'File "{name}" exists.\nNot renaming "{self._tempOutput}" to\n"{name}"')
             else:
@@ -677,7 +682,7 @@ class Job(GObject.GObject):
                 finally:
                     self.emit('job_finished', self._file_name)
         else:
-            # config.keep_original == False
+            # self._keep_original == False
             try:
                 os.remove(self._file_name)
             except Exception as e:
@@ -702,7 +707,7 @@ class Job(GObject.GObject):
         if self._tempOutput is not None and os.path.exists(self._tempOutput):
             try:
                 os.remove(self._tempOutput)
-            except:
+            except OSError:
                 pass
         self.emit('job_finished_with_error', self._file_name, error)
 
@@ -1032,13 +1037,11 @@ class FfmpegLauncher(ProcessLauncher):
     def finished_with_error(self, error):
         pass
 
-    def __init__(self, file_name: str, temp_output: str, duration: float):
-        self._file_name = file_name
-        self._temp_output = temp_output
+    def __init__(self, file_name: str, temp_output: str, volume_increase: int, duration: float):
         self._duration = duration
-        self._cmd = config.ffmpeg_increase_audio_cmd.format(video_file_name_input=self._file_name,
-                                                            video_file_name_output=self._temp_output,
-                                                            volume_increase=config.volume_increase)
+        self._cmd = config.ffmpeg_increase_audio_cmd.format(video_file_name_input=file_name,
+                                                            video_file_name_output=temp_output,
+                                                            volume_increase=volume_increase)
         super().__init__(self._cmd)
 
     def for_each_line(self, line: str):
@@ -1067,6 +1070,7 @@ class Preferences(Gtk.Window):
     def __init__(self):
         super().__init__()
         self._changed_values = False
+        self._vol_increase_decimals = 1
         self._separator_margin = 5
         self.set_title('Preferences')
         self.set_border_width(10)
@@ -1078,12 +1082,13 @@ class Preferences(Gtk.Window):
         self._grid.attach_next_to(self._video_ext_entry, self._video_ext_label, Gtk.PositionType.RIGHT, 1, 1)
 
         self._vol_increase_label = Gtk.Label(label='Volume increase: ')
-        self._vol_increase_spin = Gtk.SpinButton(adjustment=Gtk.Adjustment(value=config.volume_increase,
-                                                                           lower=1,
-                                                                           upper=10,
-                                                                           step_increment=1,
-                                                                           page_increment=1,
-                                                                           page_size=0))
+        self._vol_increase_spin = Gtk.SpinButton(adjustment=Gtk.Adjustment(value=float(config.volume_increase),
+                                                                           lower=1.0,
+                                                                           upper=10.0,
+                                                                           step_increment=0.1,
+                                                                           page_increment=0.5,
+                                                                           page_size=0.0),
+                                                 climb_rate=1.0, digits=self._vol_increase_decimals)
         self._grid.attach_next_to(self._vol_increase_label, self._video_ext_label, Gtk.PositionType.BOTTOM, 1, 1)
         self._grid.attach_next_to(self._vol_increase_spin, self._vol_increase_label, Gtk.PositionType.RIGHT, 1, 1)
 
@@ -1182,7 +1187,7 @@ class Preferences(Gtk.Window):
     def _on_destroy(self, _w):
         if self._changed_values:
             config.video_extensions = tuple(self._video_ext_entry.get_text().split(','))
-            config.volume_increase = int(self._vol_increase_spin.get_value())
+            config.volume_increase = round(self._vol_increase_spin.get_value(), self._vol_increase_decimals)
             config.use_all_cpus = self._use_all_cpus_toggle.get_active()
             config.max_jobs = int(self._max_jobs_spin.get_value())
             config.keep_original = self._keep_original_toggle.get_active()
