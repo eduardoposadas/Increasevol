@@ -740,6 +740,10 @@ class JobsQueue:
             else:
                 self._launch_job(path)
 
+    def check_queue(self):
+        while len(self._jobs_queue) > 0 and self._n_running_jobs < config.max_jobs:
+            self._unqueue_job()
+
     def _is_queued_or_running(self, path: str):
         for i in self._model:
             if (i[JOB_LIST_COLUMN_FILENAME] == path and
@@ -769,8 +773,7 @@ class JobsQueue:
 
     def _finished_job(self, _object, _path: str):
         self._n_running_jobs -= 1
-        while len(self._jobs_queue) > 0 and self._n_running_jobs < config.max_jobs:
-            self._unqueue_job()
+        self.check_queue()
 
     def _finished_with_error_job(self, _job, path: str, error: str):
         self._finished_job(self, path)
@@ -1069,7 +1072,6 @@ class Preferences(Gtk.Window):
 
     def __init__(self):
         super().__init__()
-        self._changed_values = False
         self._vol_increase_decimals = 1
         self._separator_margin = 5
         self.set_title('Preferences')
@@ -1151,24 +1153,14 @@ class Preferences(Gtk.Window):
             self._output_prefix_entry.set_sensitive(False)
             self._output_suffix_entry.set_sensitive(False)
 
-        self._video_ext_entry.connect('changed', self._set_changed_values)
-        self._vol_increase_spin.connect('value-changed', self._set_changed_values)
         self._use_all_cpus_toggle.connect('toggled', self._on_max_jobs_toggled)
-        self._max_jobs_spin.connect('value-changed', self._set_changed_values)
         self._keep_original_toggle.connect('toggled', self._on_keep_original_toggled)
-        self._output_prefix_entry.connect('changed', self._set_changed_values)
-        self._output_suffix_entry.connect('changed', self._set_changed_values)
-        self._temp_file_prefix_entry.connect('changed', self._set_changed_values)
 
         self.add(self._grid)
         self.show_all()
         self.connect('destroy', self._on_destroy)
 
-    def _set_changed_values(self, *_w):
-        self._changed_values = True
-
     def _on_max_jobs_toggled(self, toggle: Gtk.ToggleButton):
-        self._changed_values = True
         if toggle.get_active():
             self._max_jobs_spin.set_sensitive(False)
             self._max_jobs_spin.set_value(os.cpu_count())
@@ -1176,7 +1168,6 @@ class Preferences(Gtk.Window):
             self._max_jobs_spin.set_sensitive(True)
 
     def _on_keep_original_toggled(self, toggle: Gtk.ToggleButton):
-        self._changed_values = True
         if toggle.get_active():
             self._output_prefix_entry.set_sensitive(True)
             self._output_suffix_entry.set_sensitive(True)
@@ -1185,16 +1176,17 @@ class Preferences(Gtk.Window):
             self._output_suffix_entry.set_sensitive(False)
 
     def _on_destroy(self, _w):
-        if self._changed_values:
-            config.video_extensions = tuple(self._video_ext_entry.get_text().split(','))
-            config.volume_increase = round(self._vol_increase_spin.get_value(), self._vol_increase_decimals)
-            config.use_all_cpus = self._use_all_cpus_toggle.get_active()
+        if config.max_jobs != int(self._max_jobs_spin.get_value()):
             config.max_jobs = int(self._max_jobs_spin.get_value())
-            config.keep_original = self._keep_original_toggle.get_active()
-            config.output_prefix = self._output_prefix_entry.get_text()
-            config.output_suffix = self._output_suffix_entry.get_text()
-            config.temp_file_prefix = self._temp_file_prefix_entry.get_text()
+            jq.check_queue()
 
+        config.video_extensions = tuple(self._video_ext_entry.get_text().split(','))
+        config.volume_increase = round(self._vol_increase_spin.get_value(), self._vol_increase_decimals)
+        config.use_all_cpus = self._use_all_cpus_toggle.get_active()
+        config.keep_original = self._keep_original_toggle.get_active()
+        config.output_prefix = self._output_prefix_entry.get_text()
+        config.output_suffix = self._output_suffix_entry.get_text()
+        config.temp_file_prefix = self._temp_file_prefix_entry.get_text()
         self.destroy()
 
 
