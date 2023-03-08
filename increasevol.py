@@ -791,7 +791,7 @@ class JobsQueue:
     def _finished_with_error_job(self, _job, path: str, error: str):
         self._finished_job(self, path)
         self._error_message(text='Error processing file',
-                            secondary_text=f'Processing:\n{path}\nError:\n{error}')
+                            secondary_text=f'Processing:\n{path}\n\nError:\n{error}')
 
     def _error_message(self, text: str, secondary_text: str):
         dialog = Gtk.MessageDialog(
@@ -940,7 +940,7 @@ class ProcessLauncher(GObject.GObject):
             self._queue_read()
         except GLib.GError as e:
             traceback.print_exc()
-            self.at_finalization_with_error(str(e))
+            self.at_finalization_with_error(f'{str(e)}\n\nCommand:\n{self._cmd}')
             return
 
     def _queue_read(self):
@@ -962,7 +962,7 @@ class ProcessLauncher(GObject.GObject):
             proc.wait_check_finish(results)
         except Exception as e:
             traceback.print_exc()
-            self.at_finalization_with_error(str(e))
+            self.at_finalization_with_error(f'{str(e)}\n\nCommand:\n{self._cmd}')
         else:
             self.at_finalization()
         self._cancel_read()
@@ -980,7 +980,7 @@ class ProcessLauncher(GObject.GObject):
                 self.for_each_line(line)
         except GLib.GError as e:
             traceback.print_exc()
-            self.at_finalization_with_error(str(e))
+            self.at_finalization_with_error(f'{str(e)}\n\nCommand:\n{self._cmd}')
             return
 
         # read_upto_finish() returns None on error without raise any exception
