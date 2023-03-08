@@ -46,6 +46,7 @@ class Configuration:
 
     def __init__(self):
         self._video_extensions = ('mp4', 'avi', 'mkv')
+        self._remove_subtitles = False
         self._volume_increase = 3
         self._keep_original = False
         self._output_prefix = ''  # Only used if _keep_original == True
@@ -69,6 +70,7 @@ class Configuration:
         self._ffprobe_get_duration_cmd = 'ffprobe -v error -show_entries format=duration ' \
                                          '-of default=noprint_wrappers=1:nokey=1 "{video_file_name}"'
         self._ffmpeg_increase_audio_cmd = 'ffmpeg -hide_banner -y -i "{video_file_name_input}" ' \
+                                          '{remove_subtitles_param} ' \
                                           '-acodec mp3 -filter:a volume={volume_increase} -vcodec copy ' \
                                           '"{video_file_name_output}"'
 
@@ -82,6 +84,7 @@ class Configuration:
             if len(tmp_tuple) > 0:
                 self._video_extensions = tmp_tuple
 
+        self._remove_subtitles = temp_conf.getboolean('DEFAULT', 'remove_subtitles', fallback=self._remove_subtitles)
         self._cwd = temp_conf.get('DEFAULT', 'directory', fallback=self._cwd)
         self._volume_increase = temp_conf.getfloat('DEFAULT', 'volume_increase', fallback=self._volume_increase)
         self._keep_original = temp_conf.getboolean('DEFAULT', 'keep_original', fallback=self._keep_original)
@@ -129,6 +132,14 @@ class Configuration:
     @video_extensions.setter
     def video_extensions(self, val: tuple):
         self._video_extensions = val
+
+    @property
+    def remove_subtitles(self):
+        return self._remove_subtitles
+
+    @remove_subtitles.setter
+    def remove_subtitles(self, val: bool):
+        self._remove_subtitles = val
 
     @property
     def volume_increase(self):
@@ -603,6 +614,7 @@ class Job(GObject.GObject):
         self._start_time = 0
         self._tempOutput = None
         self._volume_increase = config.volume_increase
+        self._remove_subtitles = config.remove_subtitles
         self._keep_original = config.keep_original
         self._output_prefix = config.output_prefix
         self._output_suffix = config.output_suffix
@@ -644,7 +656,8 @@ class Job(GObject.GObject):
 
         self._start_time = time.time()
 
-        ffmpeg = FfmpegLauncher(self._file_name, self._tempOutput, self._volume_increase, self._duration)
+        ffmpeg = FfmpegLauncher(self._file_name, self._tempOutput, self._volume_increase, self._remove_subtitles,
+                                self._duration)
         ffmpeg.connect('update_state', self._update_conversion_state)
         ffmpeg.connect('finished', self._conversion_finished)
         ffmpeg.connect('finished_with_error', self._manage_error)
@@ -1040,11 +1053,12 @@ class FfmpegLauncher(ProcessLauncher):
     def finished_with_error(self, error):
         pass
 
-    def __init__(self, file_name: str, temp_output: str, volume_increase: int, duration: float):
+    def __init__(self, file_name: str, temp_output: str, volume_increase: int, remove_subtitles: bool, duration: float):
         self._duration = duration
         self._cmd = config.ffmpeg_increase_audio_cmd.format(video_file_name_input=file_name,
                                                             video_file_name_output=temp_output,
-                                                            volume_increase=volume_increase)
+                                                            volume_increase=volume_increase,
+                                                            remove_subtitles_param='-sn' if remove_subtitles else '')
         super().__init__(self._cmd)
 
     def for_each_line(self, line: str):
@@ -1094,10 +1108,16 @@ class Preferences(Gtk.Window):
         self._grid.attach_next_to(self._vol_increase_label, self._video_ext_label, Gtk.PositionType.BOTTOM, 1, 1)
         self._grid.attach_next_to(self._vol_increase_spin, self._vol_increase_label, Gtk.PositionType.RIGHT, 1, 1)
 
+        self._remove_subtitles_label = Gtk.Label(label='Remove subtitles: ')
+        self._remove_subtitles_toggle = Gtk.CheckButton(active=config.remove_subtitles)
+        self._grid.attach_next_to(self._remove_subtitles_label, self._vol_increase_label, Gtk.PositionType.BOTTOM, 1, 1)
+        self._grid.attach_next_to(self._remove_subtitles_toggle, self._remove_subtitles_label, Gtk.PositionType.RIGHT,
+                                  1, 1)
+
         self._sep1 = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
         self._sep1.set_margin_top(self._separator_margin)
         self._sep1.set_margin_bottom(self._separator_margin)
-        self._grid.attach_next_to(self._sep1, self._vol_increase_label, Gtk.PositionType.BOTTOM, 2, 1)
+        self._grid.attach_next_to(self._sep1, self._remove_subtitles_label, Gtk.PositionType.BOTTOM, 2, 1)
 
         self._max_jobs_label = Gtk.Label(label='Number of jobs: ')
         self._max_jobs_spin = Gtk.SpinButton(adjustment=Gtk.Adjustment(value=config.max_jobs,
@@ -1181,6 +1201,7 @@ class Preferences(Gtk.Window):
             jq.check_queue()
 
         config.video_extensions = tuple(self._video_ext_entry.get_text().split(','))
+        config.remove_subtitles = self._remove_subtitles_toggle.get_active()
         config.volume_increase = round(self._vol_increase_spin.get_value(), self._vol_increase_decimals)
         config.use_all_cpus = self._use_all_cpus_toggle.get_active()
         config.keep_original = self._keep_original_toggle.get_active()
@@ -1357,6 +1378,7 @@ class Application(Gtk.Application):
         temp_conf['DEFAULT'] = {
             'directory': config.cwd,
             'video_extensions': ','.join(config.video_extensions),
+            'remove_subtitles': config.remove_subtitles,
             'volume_increase': config.volume_increase,
             'keep_original': config.keep_original,
             'output_prefix': config.output_prefix,
