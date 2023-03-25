@@ -42,7 +42,7 @@ from gi.repository import GObject, GLib, Gio, GdkPixbuf, Pango, Gdk, Gtk
 
 
 class Configuration:
-    """Set default configuration values and load configuration file values."""
+    """Set default configuration values and load/save configuration values."""
 
     def __init__(self):
         self._video_extensions = ('mp4', 'avi', 'mkv')
@@ -73,8 +73,10 @@ class Configuration:
                                           '{remove_subtitles_param} ' \
                                           '-acodec mp3 -filter:a volume={volume_increase} -vcodec copy ' \
                                           '"{video_file_name_output}"'
+        self._load()
 
-        # Load configuration file
+    def _load(self):
+        """Load configuration values from configuration file"""
         temp_conf = configparser.ConfigParser()
         temp_conf.read(self._file)
 
@@ -108,6 +110,44 @@ class Configuration:
         self._win_maximized = temp_conf.getboolean('DEFAULT', 'win_maximized', fallback=self._win_maximized)
         self._win_width = temp_conf.getint('DEFAULT', 'win_width', fallback=self._win_width)
         self._win_height = temp_conf.getint('DEFAULT', 'win_height', fallback=self._win_height)
+
+    def save(self):
+        """Save configuration values from configuration file"""
+        temp_conf = configparser.ConfigParser()
+        temp_conf['DEFAULT'] = {
+            'directory': self._cwd,
+            'video_extensions': ','.join(self._video_extensions),
+            'remove_subtitles': self._remove_subtitles,
+            'volume_increase': self._volume_increase,
+            'keep_original': self._keep_original,
+            'output_prefix': self._output_prefix,
+            'output_suffix': self._output_suffix,
+            'use_all_cpus': self._use_all_cpus,
+            'max_jobs': self._max_jobs,
+            'file_explorer_show_hidden_files': self._file_expl_show_hidden_files,
+            'file_explorer_case_insensitive_sort': self._file_expl_case_insensitive_sort,
+            'file_explorer_activate_on_single_click': self._file_expl_activate_on_single_click,
+            'temp_file_prefix': self._temp_file_prefix,
+            'ignore_temp_files': self._ignore_temp_files,
+            'paned_file_explorer_position': self._paned_file_expl_position,
+            'win_maximized': self._win_maximized,
+            'win_width': self._win_width,
+            'win_height': self._win_height
+        }
+
+        try:
+            with open(self._file, 'w') as configfile:
+                temp_conf.write(configfile)
+        except OSError:
+            traceback.print_exc()
+            dialog = Gtk.MessageDialog(
+                message_type=Gtk.MessageType.ERROR,
+                buttons=Gtk.ButtonsType.CLOSE,
+                title='Error',
+                text='Error saving configuration',
+                secondary_text=traceback.format_exc()
+            )
+            dialog.run()
 
     @property
     def file(self):
@@ -1374,42 +1414,7 @@ class Application(Gtk.Application):
 
     def do_shutdown(self):
         config.cwd = self.window.file_exp.cwd
-        temp_conf = configparser.ConfigParser()
-        temp_conf['DEFAULT'] = {
-            'directory': config.cwd,
-            'video_extensions': ','.join(config.video_extensions),
-            'remove_subtitles': config.remove_subtitles,
-            'volume_increase': config.volume_increase,
-            'keep_original': config.keep_original,
-            'output_prefix': config.output_prefix,
-            'output_suffix': config.output_suffix,
-            'use_all_cpus': config.use_all_cpus,
-            'max_jobs': config.max_jobs,
-            'file_explorer_show_hidden_files': config.file_expl_show_hidden_files,
-            'file_explorer_case_insensitive_sort': config.file_expl_case_insensitive_sort,
-            'file_explorer_activate_on_single_click': config.file_expl_activate_on_single_click,
-            'temp_file_prefix': config.temp_file_prefix,
-            'ignore_temp_files': config.ignore_temp_files,
-            'paned_file_explorer_position': config.paned_file_expl_position,
-            'win_maximized': config.win_maximized,
-            'win_width': config.win_width,
-            'win_height': config.win_height
-        }
-
-        try:
-            with open(config.file, 'w') as configfile:
-                temp_conf.write(configfile)
-        except OSError:
-            traceback.print_exc()
-            dialog = Gtk.MessageDialog(
-                message_type=Gtk.MessageType.ERROR,
-                buttons=Gtk.ButtonsType.CLOSE,
-                title='Error',
-                text='Error saving configuration',
-                secondary_text=traceback.format_exc()
-            )
-            dialog.run()
-
+        config.save()
         Gtk.Application.do_shutdown(self)
 
     def _on_about(self, _action, _param):
