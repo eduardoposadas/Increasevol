@@ -112,7 +112,7 @@ class Configuration:
         self._win_height = temp_conf.getint('DEFAULT', 'win_height', fallback=self._win_height)
 
     def save(self):
-        """Save configuration values from configuration file"""
+        """Save configuration values to configuration file"""
         temp_conf = configparser.ConfigParser()
         temp_conf['DEFAULT'] = {
             'directory': self._cwd,
