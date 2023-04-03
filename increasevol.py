@@ -678,7 +678,7 @@ class Job(GObject.GObject):
         """Launch ffmpeg to increase the volume."""
         self._duration = duration
         if self._duration == 0:
-            self._manage_error(None, "Error executing ffprobe. Can't get video's duration.")
+            self._manage_error(None, "Error executing ffprobe. Can't get video's duration.", False)
             return
 
         # Choose temporary output file
@@ -689,7 +689,7 @@ class Job(GObject.GObject):
                                                         suffix=suffix,
                                                         prefix=self._temp_file_prefix)
         except Exception as e:
-            self._manage_error(None, 'Error creating temporal file:\n' + str(e))
+            self._manage_error(None, 'Error creating temporal file:\n' + str(e), True)
             return
         else:
             os.close(handle)
@@ -726,12 +726,13 @@ class Job(GObject.GObject):
             name, ext = os.path.splitext(name)
             name = directory + os.sep + self._output_prefix + name + self._output_suffix + ext
             if os.path.exists(name):
-                self._manage_error(None, f'File "{name}" exists.\nNot renaming "{self._tempOutput}" to\n"{name}"')
+                self._manage_error(None, f'File "{name}" exists.\nNot renaming "{self._tempOutput}" to\n"{name}"',
+                                   False)
             else:
                 try:
                     os.rename(self._tempOutput, name)
                 except Exception as e:
-                    self._manage_error(None, f'Error renaming "{self._tempOutput}" to\n"{name}":\n\n{str(e)}')
+                    self._manage_error(None, f'Error renaming "{self._tempOutput}" to\n"{name}":\n\n{str(e)}', False)
                 finally:
                     self.emit('job_finished', self._file_name)
         else:
@@ -742,22 +743,24 @@ class Job(GObject.GObject):
                 self._manage_error(None, f'Error removing "{self._file_name}"\n'
                                          f'Preserving temporal output file:\n'
                                          f'"{self._tempOutput}"\n\n'
-                                         f'{str(e)}')
+                                         f'{str(e)}',
+                                   False)
             else:
                 try:
                     os.rename(self._tempOutput, self._file_name)
                 except Exception as e:
                     self._manage_error(None, f'Error renaming "{self._tempOutput}" to\n'
                                              f'"{self._file_name}":\n\n'
-                                             f'{str(e)}')
+                                             f'{str(e)}',
+                                       False)
                 finally:
                     self.emit('job_finished', self._file_name)
 
-    def _manage_error(self, _object, error: str):
+    def _manage_error(self, _object, error: str, remove_temp_output: bool):
         self._model[self._list_row][JOB_LIST_COLUMN_STATUS] = job_status_pixbuf[JobStatus.FAILED]
         self._model[self._list_row][JOB_LIST_COLUMN_ESTTIME] = '--:--:--'
 
-        if self._tempOutput is not None and os.path.exists(self._tempOutput):
+        if remove_temp_output and self._tempOutput is not None and os.path.exists(self._tempOutput):
             try:
                 os.remove(self._tempOutput)
             except OSError:
@@ -1051,8 +1054,8 @@ class FfprobeLauncher(ProcessLauncher):
     def finished(self, duration):
         pass
 
-    @GObject.Signal(arg_types=(str,))
-    def finished_with_error(self, error):
+    @GObject.Signal(arg_types=(str, bool,))
+    def finished_with_error(self, error, remove_temp_output):
         pass
 
     def __init__(self, file_name: str):
@@ -1077,7 +1080,7 @@ class FfprobeLauncher(ProcessLauncher):
         self.emit('finished', self._duration)
 
     def at_finalization_with_error(self, error):
-        self.emit('finished_with_error', error)
+        self.emit('finished_with_error', error, True)
 
 
 class FfmpegLauncher(ProcessLauncher):
@@ -1089,8 +1092,8 @@ class FfmpegLauncher(ProcessLauncher):
     def finished(self):
         pass
 
-    @GObject.Signal(arg_types=(str,))
-    def finished_with_error(self, error):
+    @GObject.Signal(arg_types=(str, bool,))
+    def finished_with_error(self, error, remove_temp_output):
         pass
 
     def __init__(self, file_name: str, temp_output: str, volume_increase: int, remove_subtitles: bool, duration: float):
@@ -1118,7 +1121,7 @@ class FfmpegLauncher(ProcessLauncher):
         self.emit('finished')
 
     def at_finalization_with_error(self, error):
-        self.emit('finished_with_error', error)
+        self.emit('finished_with_error', error, True)
 
 
 class Preferences(Gtk.Window):
