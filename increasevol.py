@@ -69,9 +69,9 @@ class Configuration:
         self._paned_file_expl_position = 400
         self._ffprobe_get_duration_cmd = 'ffprobe -v error -show_entries format=duration ' \
                                          '-of default=noprint_wrappers=1:nokey=1 "{video_file_name}"'
-        self._ffmpeg_increase_audio_cmd = 'ffmpeg -hide_banner -y -i "{video_file_name_input}" ' \
-                                          '{remove_subtitles_param} ' \
-                                          '-acodec mp3 -filter:a volume={volume_increase} -vcodec copy ' \
+        self._ffmpeg_increase_audio_cmd = 'ffmpeg -hide_banner -y -i "{video_file_name_input}" -map 0 -c:v copy ' \
+                                          '{remove_subtitles_param} -c:s copy ' \
+                                          '-c:a mp3 -filter:a volume={volume_increase} ' \
                                           '"{video_file_name_output}"'
         self._load()
 
