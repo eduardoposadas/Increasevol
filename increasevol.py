@@ -678,7 +678,6 @@ class Job(GObject.GObject):
         """Launch ffmpeg to increase the volume."""
         self._duration = duration
         if self._duration == 0:
-            self._manage_error(None, "Error executing ffprobe. Can't get video's duration.", False)
             return
 
         # Choose temporary output file
@@ -1059,6 +1058,7 @@ class FfprobeLauncher(ProcessLauncher):
         pass
 
     def __init__(self, file_name: str):
+        self._error = False
         self._duration = 0
         self._n_lines = 0
         self._cmd = config.ffprobe_get_duration_cmd.format(video_file_name=file_name)
@@ -1080,7 +1080,9 @@ class FfprobeLauncher(ProcessLauncher):
         self.emit('finished', self._duration)
 
     def at_finalization_with_error(self, error):
-        self.emit('finished_with_error', error, True)
+        if not self._error:
+            self._error = True
+            self.emit('finished_with_error', error, True)
 
 
 class FfmpegLauncher(ProcessLauncher):
@@ -1097,6 +1099,7 @@ class FfmpegLauncher(ProcessLauncher):
         pass
 
     def __init__(self, file_name: str, temp_output: str, volume_increase: int, remove_subtitles: bool, duration: float):
+        self._error = False
         self._duration = duration
         self._cmd = config.ffmpeg_increase_audio_cmd.format(video_file_name_input=file_name,
                                                             video_file_name_output=temp_output,
@@ -1121,7 +1124,9 @@ class FfmpegLauncher(ProcessLauncher):
         self.emit('finished')
 
     def at_finalization_with_error(self, error):
-        self.emit('finished_with_error', error, True)
+        if not self._error:
+            self._error = True
+            self.emit('finished_with_error', error, True)
 
 
 class Preferences(Gtk.Window):
