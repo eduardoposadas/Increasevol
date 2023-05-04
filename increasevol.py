@@ -48,6 +48,7 @@ class Configuration:
         self._video_extensions = ('mp4', 'avi', 'mkv')
         self._remove_subtitles = False
         self._volume_increase = 3
+        self._audio_quality = 2
         self._keep_original = False
         self._output_prefix = ''  # Only used if _keep_original == True
         self._output_suffix = '_Vol-inc'  # Only used if _keep_original == True
@@ -71,7 +72,7 @@ class Configuration:
                                          '-of default=noprint_wrappers=1:nokey=1 "{video_file_name}"'
         self._ffmpeg_increase_audio_cmd = 'ffmpeg -hide_banner -y -i "{video_file_name_input}" -map 0 -c:v copy ' \
                                           '{remove_subtitles_param} -c:s copy ' \
-                                          '-c:a mp3 -filter:a volume={volume_increase} ' \
+                                          '-c:a mp3 -q:a {audio_quality} -filter:a volume={volume_increase} ' \
                                           '"{video_file_name_output}"'
         self._load()
 
@@ -89,6 +90,7 @@ class Configuration:
         self._remove_subtitles = temp_conf.getboolean('DEFAULT', 'remove_subtitles', fallback=self._remove_subtitles)
         self._cwd = temp_conf.get('DEFAULT', 'directory', fallback=self._cwd)
         self._volume_increase = temp_conf.getfloat('DEFAULT', 'volume_increase', fallback=self._volume_increase)
+        self._audio_quality = temp_conf.getfloat('DEFAULT', 'audio_quality', fallback=self._audio_quality)
         self._keep_original = temp_conf.getboolean('DEFAULT', 'keep_original', fallback=self._keep_original)
         self._output_prefix = temp_conf.get('DEFAULT', 'output_prefix', fallback=self._output_prefix)
         self._output_suffix = temp_conf.get('DEFAULT', 'output_suffix', fallback=self._output_suffix)
@@ -119,6 +121,7 @@ class Configuration:
             'video_extensions': ','.join(self._video_extensions),
             'remove_subtitles': self._remove_subtitles,
             'volume_increase': self._volume_increase,
+            'audio_quality': self._audio_quality,
             'keep_original': self._keep_original,
             'output_prefix': self._output_prefix,
             'output_suffix': self._output_suffix,
@@ -188,6 +191,14 @@ class Configuration:
     @volume_increase.setter
     def volume_increase(self, val: float):
         self._volume_increase = val
+
+    @property
+    def audio_quality(self):
+        return self._audio_quality
+
+    @audio_quality.setter
+    def audio_quality(self, val: float):
+        self._audio_quality = val
 
     @property
     def keep_original(self):
@@ -654,6 +665,7 @@ class Job(GObject.GObject):
         self._start_time = 0
         self._tempOutput = None
         self._volume_increase = config.volume_increase
+        self._audio_quality = config.audio_quality
         self._remove_subtitles = config.remove_subtitles
         self._keep_original = config.keep_original
         self._output_prefix = config.output_prefix
@@ -695,8 +707,8 @@ class Job(GObject.GObject):
 
         self._start_time = time.time()
 
-        ffmpeg = FfmpegLauncher(self._file_name, self._tempOutput, self._volume_increase, self._remove_subtitles,
-                                self._duration)
+        ffmpeg = FfmpegLauncher(self._file_name, self._tempOutput, self._volume_increase, self._audio_quality,
+                                self._remove_subtitles, self._duration)
         ffmpeg.connect('update_state', self._update_conversion_state)
         ffmpeg.connect('finished', self._conversion_finished)
         ffmpeg.connect('finished_with_error', self._manage_error)
@@ -1098,12 +1110,14 @@ class FfmpegLauncher(ProcessLauncher):
     def finished_with_error(self, error, remove_temp_output):
         pass
 
-    def __init__(self, file_name: str, temp_output: str, volume_increase: int, remove_subtitles: bool, duration: float):
+    def __init__(self, file_name: str, temp_output: str, volume_increase: float, audio_quality: float,
+                 remove_subtitles: bool, duration: float):
         self._error = False
         self._duration = duration
         self._cmd = config.ffmpeg_increase_audio_cmd.format(video_file_name_input=file_name,
                                                             video_file_name_output=temp_output,
                                                             volume_increase=volume_increase,
+                                                            audio_quality=audio_quality,
                                                             remove_subtitles_param='-sn' if remove_subtitles else '')
         super().__init__(self._cmd)
 
@@ -1135,6 +1149,8 @@ class Preferences(Gtk.Window):
     def __init__(self):
         super().__init__()
         self._vol_increase_decimals = 1
+        self._audio_quality_decimals = 1
+        self._audio_quality_max = 10
         self._separator_margin = 5
         self.set_title('Preferences')
         self.set_border_width(10)
@@ -1145,27 +1161,56 @@ class Preferences(Gtk.Window):
         self._grid.add(self._video_ext_label)
         self._grid.attach_next_to(self._video_ext_entry, self._video_ext_label, Gtk.PositionType.RIGHT, 1, 1)
 
+        self._sep1 = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        self._sep1.set_margin_top(self._separator_margin)
+        self._sep1.set_margin_bottom(self._separator_margin)
+        self._grid.attach_next_to(self._sep1, self._video_ext_label, Gtk.PositionType.BOTTOM, 2, 1)
+
         self._vol_increase_label = Gtk.Label(label='Volume increase: ')
-        self._vol_increase_spin = Gtk.SpinButton(adjustment=Gtk.Adjustment(value=float(config.volume_increase),
+        self._vol_increase_spin = Gtk.SpinButton(climb_rate=1.0,
+                                                 digits=self._vol_increase_decimals,
+                                                 adjustment=Gtk.Adjustment(value=float(config.volume_increase),
                                                                            lower=1.0,
                                                                            upper=10.0,
                                                                            step_increment=0.1,
                                                                            page_increment=0.5,
-                                                                           page_size=0.0),
-                                                 climb_rate=1.0, digits=self._vol_increase_decimals)
-        self._grid.attach_next_to(self._vol_increase_label, self._video_ext_label, Gtk.PositionType.BOTTOM, 1, 1)
+                                                                           page_size=0.0))
+        self._grid.attach_next_to(self._vol_increase_label, self._sep1, Gtk.PositionType.BOTTOM, 1, 1)
         self._grid.attach_next_to(self._vol_increase_spin, self._vol_increase_label, Gtk.PositionType.RIGHT, 1, 1)
+
+        self._audio_quality_label = Gtk.Label(label='Audio quality: ')
+        self._audio_quality_scale = Gtk.Scale(digits=self._audio_quality_decimals,
+                                              orientation=Gtk.Orientation.HORIZONTAL,
+                                              adjustment=Gtk.Adjustment(value=float(self._audio_quality_max -
+                                                                                    config.audio_quality),
+                                                                        lower=0.1,
+                                                                        upper=10,
+                                                                        step_increment=0.1,
+                                                                        page_increment=0.5,
+                                                                        page_size=0.0))
+        self._audio_quality_scale.set_draw_value(False)
+        self._audio_quality_label.set_margin_bottom(27)  # FIXME. How to center the label?
+        self._audio_quality_scale.add_mark(value=3, position=Gtk.PositionType.BOTTOM, markup='Low')
+        self._audio_quality_scale.add_mark(value=6, position=Gtk.PositionType.BOTTOM, markup='Default')
+        self._audio_quality_scale.add_mark(value=8, position=Gtk.PositionType.BOTTOM, markup='High')
+        self._grid.attach_next_to(self._audio_quality_label, self._vol_increase_label, Gtk.PositionType.BOTTOM, 1, 1)
+        self._grid.attach_next_to(self._audio_quality_scale, self._audio_quality_label, Gtk.PositionType.RIGHT, 1, 1)
+
+        self._sep2 = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        self._sep2.set_margin_top(self._separator_margin)
+        self._sep2.set_margin_bottom(self._separator_margin)
+        self._grid.attach_next_to(self._sep2, self._audio_quality_label, Gtk.PositionType.BOTTOM, 2, 1)
 
         self._remove_subtitles_label = Gtk.Label(label='Remove subtitles: ')
         self._remove_subtitles_toggle = Gtk.CheckButton(active=config.remove_subtitles)
-        self._grid.attach_next_to(self._remove_subtitles_label, self._vol_increase_label, Gtk.PositionType.BOTTOM, 1, 1)
+        self._grid.attach_next_to(self._remove_subtitles_label, self._sep2, Gtk.PositionType.BOTTOM, 1, 1)
         self._grid.attach_next_to(self._remove_subtitles_toggle, self._remove_subtitles_label, Gtk.PositionType.RIGHT,
                                   1, 1)
 
-        self._sep1 = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
-        self._sep1.set_margin_top(self._separator_margin)
-        self._sep1.set_margin_bottom(self._separator_margin)
-        self._grid.attach_next_to(self._sep1, self._remove_subtitles_label, Gtk.PositionType.BOTTOM, 2, 1)
+        self._sep3 = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        self._sep3.set_margin_top(self._separator_margin)
+        self._sep3.set_margin_bottom(self._separator_margin)
+        self._grid.attach_next_to(self._sep3, self._remove_subtitles_label, Gtk.PositionType.BOTTOM, 2, 1)
 
         self._max_jobs_label = Gtk.Label(label='Number of jobs: ')
         self._max_jobs_spin = Gtk.SpinButton(adjustment=Gtk.Adjustment(value=config.max_jobs,
@@ -1174,7 +1219,7 @@ class Preferences(Gtk.Window):
                                                                        step_increment=1,
                                                                        page_increment=1,
                                                                        page_size=0))
-        self._grid.attach_next_to(self._max_jobs_label, self._sep1, Gtk.PositionType.BOTTOM, 1, 1)
+        self._grid.attach_next_to(self._max_jobs_label, self._sep3, Gtk.PositionType.BOTTOM, 1, 1)
         self._grid.attach_next_to(self._max_jobs_spin, self._max_jobs_label, Gtk.PositionType.RIGHT, 1, 1)
 
         self._use_all_cpus_label = Gtk.Label(label='Use all CPUs: ')
@@ -1182,14 +1227,14 @@ class Preferences(Gtk.Window):
         self._grid.attach_next_to(self._use_all_cpus_label, self._max_jobs_label, Gtk.PositionType.BOTTOM, 1, 1)
         self._grid.attach_next_to(self._use_all_cpus_toggle, self._use_all_cpus_label, Gtk.PositionType.RIGHT, 1, 1)
 
-        self._sep2 = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
-        self._sep2.set_margin_top(self._separator_margin)
-        self._sep2.set_margin_bottom(self._separator_margin)
-        self._grid.attach_next_to(self._sep2, self._use_all_cpus_label, Gtk.PositionType.BOTTOM, 2, 1)
+        self._sep4 = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        self._sep4.set_margin_top(self._separator_margin)
+        self._sep4.set_margin_bottom(self._separator_margin)
+        self._grid.attach_next_to(self._sep4, self._use_all_cpus_label, Gtk.PositionType.BOTTOM, 2, 1)
 
         self._keep_original_label = Gtk.Label(label='Keep Original: ')
         self._keep_original_toggle = Gtk.CheckButton(active=config.keep_original)
-        self._grid.attach_next_to(self._keep_original_label, self._sep2, Gtk.PositionType.BOTTOM, 1, 1)
+        self._grid.attach_next_to(self._keep_original_label, self._sep4, Gtk.PositionType.BOTTOM, 1, 1)
         self._grid.attach_next_to(self._keep_original_toggle, self._keep_original_label, Gtk.PositionType.RIGHT, 1, 1)
 
         self._output_prefix_label = Gtk.Label(label='Output prefix: ')
@@ -1202,16 +1247,23 @@ class Preferences(Gtk.Window):
         self._grid.attach_next_to(self._output_suffix_label, self._output_prefix_label, Gtk.PositionType.BOTTOM, 1, 1)
         self._grid.attach_next_to(self._output_suffix_entry, self._output_suffix_label, Gtk.PositionType.RIGHT, 1, 1)
 
-        self._sep3 = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
-        self._sep3.set_margin_top(self._separator_margin)
-        self._sep3.set_margin_bottom(self._separator_margin)
-        self._grid.attach_next_to(self._sep3, self._output_suffix_label, Gtk.PositionType.BOTTOM, 2, 1)
+        self._sep5 = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        self._sep5.set_margin_top(self._separator_margin)
+        self._sep5.set_margin_bottom(self._separator_margin)
+        self._grid.attach_next_to(self._sep5, self._output_suffix_label, Gtk.PositionType.BOTTOM, 2, 1)
 
         self._temp_file_prefix_label = Gtk.Label(label='Temporal file prefix: ')
         self._temp_file_prefix_entry = Gtk.Entry(text=config.temp_file_prefix)
-        self._grid.attach_next_to(self._temp_file_prefix_label, self._sep3, Gtk.PositionType.BOTTOM, 1, 1)
+        self._grid.attach_next_to(self._temp_file_prefix_label, self._sep5, Gtk.PositionType.BOTTOM, 1, 1)
         self._grid.attach_next_to(self._temp_file_prefix_entry, self._temp_file_prefix_label, Gtk.PositionType.RIGHT, 1,
                                   1)
+        # Avoid selection of _video_ext_entry text
+        self._use_all_cpus_toggle.grab_focus()
+
+        # Kubuntu GTK theme doesn't show scale ticks
+        provider = Gtk.CssProvider()
+        provider.load_from_data(b"scale marks mark indicator {min-height: 5px; min-width: 5px;}")
+        self._audio_quality_scale.get_style_context().add_provider(provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
 
         if config.use_all_cpus:
             self._use_all_cpus_toggle.set_active(True)
@@ -1251,6 +1303,10 @@ class Preferences(Gtk.Window):
         config.video_extensions = tuple(self._video_ext_entry.get_text().split(','))
         config.remove_subtitles = self._remove_subtitles_toggle.get_active()
         config.volume_increase = round(self._vol_increase_spin.get_value(), self._vol_increase_decimals)
+        # Why self._audio_quality_max - value? Because 0 is the best quality and 9.9 the worst.
+        # See https://trac.ffmpeg.org/wiki/Encode/MP3
+        config.audio_quality = round(self._audio_quality_max - self._audio_quality_scale.get_value(),
+                                     self._audio_quality_decimals)
         config.use_all_cpus = self._use_all_cpus_toggle.get_active()
         config.keep_original = self._keep_original_toggle.get_active()
         config.output_prefix = self._output_prefix_entry.get_text()
