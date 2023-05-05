@@ -766,7 +766,12 @@ class Job(GObject.GObject):
     def _conversion_finished(self, _object):
         self._model[self._list_row][JOB_LIST_COLUMN_STATUS] = job_status_pixbuf[JobStatus.FINISHED]
         self._model[self._list_row][JOB_LIST_COLUMN_PROGRESS] = 100
-        self._model[self._list_row][JOB_LIST_COLUMN_ESTTIME] = ''
+
+        spent_time = time.time() - self._start_time
+        m, s = divmod(int(spent_time), 60)
+        h, m = divmod(m, 60)
+        spent_time_str = f'{h:02d}:{m:02d}:{s:02d}'
+        self._model[self._list_row][JOB_LIST_COLUMN_ESTTIME] = f'Total: {spent_time_str}'
 
         if self._keep_original:
             directory, name = os.path.split(self._file_name)
