@@ -48,7 +48,8 @@ class Configuration:
         self._video_extensions = ('mp4', 'avi', 'mkv')
         self._remove_subtitles = False
         self._volume_increase = 3
-        self._audio_quality = 2
+        self._audio_encoder = 'mp3'  # Key for _audio_encoder_quality
+        self._audio_quality = 3  # Index for _audio_encoder_quality[_audio_encoder]
         self._keep_original = False
         self._output_prefix = ''  # Only used if _keep_original == True
         self._output_suffix = '_Vol-inc'  # Only used if _keep_original == True
@@ -68,11 +69,23 @@ class Configuration:
         self._win_height = 309
         self._file_expl_undo_size = 100  # Stack size for "back" button
         self._paned_file_expl_position = 400
+        """audio_encoder_quality:
+        Key: ffmpeg audio encoder
+        Value: list with valid quality values for the audio encoder, from lowest to highest quality
+        """
+        self._audio_encoder_quality = {
+            'mp3':       [9.9,   8, 5,   3,  0],  # https://trac.ffmpeg.org/wiki/Encode/MP3
+            'aac':       [0.1, 0.5, 1, 1.5,  2],  # https://trac.ffmpeg.org/wiki/Encode/AAC
+            'libvorbis': [0,   2.5, 5, 7.5, 10],  # https://ffmpeg.org/ffmpeg-codecs.html#libvorbis
+            # 'eac3': [],
+        }
+        self._n_qualities = len(self._audio_encoder_quality[self._audio_encoder])
         self._ffprobe_get_duration_cmd = 'ffprobe -v error -show_entries format=duration ' \
                                          '-of default=noprint_wrappers=1:nokey=1 "{video_file_name}"'
         self._ffmpeg_increase_audio_cmd = 'ffmpeg -hide_banner -y -i "{video_file_name_input}" -map 0 -c:v copy ' \
                                           '{remove_subtitles_param} -c:s copy ' \
-                                          '-c:a mp3 -q:a {audio_quality} -filter:a volume={volume_increase} ' \
+                                          '-c:a {audio_encoder} -q:a {audio_quality} ' \
+                                          '-filter:a volume={volume_increase} ' \
                                           '"{video_file_name_output}"'
         self._load()
 
@@ -90,7 +103,8 @@ class Configuration:
         self._remove_subtitles = temp_conf.getboolean('DEFAULT', 'remove_subtitles', fallback=self._remove_subtitles)
         self._cwd = temp_conf.get('DEFAULT', 'directory', fallback=self._cwd)
         self._volume_increase = temp_conf.getfloat('DEFAULT', 'volume_increase', fallback=self._volume_increase)
-        self._audio_quality = temp_conf.getfloat('DEFAULT', 'audio_quality', fallback=self._audio_quality)
+        self._audio_encoder = temp_conf.get('DEFAULT', 'audio_encoder', fallback=self._audio_encoder)
+        self._audio_quality = temp_conf.getint('DEFAULT', 'audio_quality', fallback=self._audio_quality)
         self._keep_original = temp_conf.getboolean('DEFAULT', 'keep_original', fallback=self._keep_original)
         self._output_prefix = temp_conf.get('DEFAULT', 'output_prefix', fallback=self._output_prefix)
         self._output_suffix = temp_conf.get('DEFAULT', 'output_suffix', fallback=self._output_suffix)
@@ -121,6 +135,7 @@ class Configuration:
             'video_extensions': ','.join(self._video_extensions),
             'remove_subtitles': self._remove_subtitles,
             'volume_increase': self._volume_increase,
+            'audio_encoder': self._audio_encoder,
             'audio_quality': self._audio_quality,
             'keep_original': self._keep_original,
             'output_prefix': self._output_prefix,
@@ -193,12 +208,32 @@ class Configuration:
         self._volume_increase = val
 
     @property
+    def audio_encoder(self):
+        return self._audio_encoder
+
+    @audio_encoder.setter
+    def audio_encoder(self, val: str):
+        self._audio_encoder = val
+
+    @property
+    def audio_encoders(self):
+        return list(self._audio_encoder_quality)
+
+    @property
     def audio_quality(self):
         return self._audio_quality
 
     @audio_quality.setter
-    def audio_quality(self, val: float):
+    def audio_quality(self, val: int):
         self._audio_quality = val
+
+    @property
+    def audio_encoder_quality(self):
+        return self._audio_encoder_quality[self._audio_encoder][self._audio_quality]
+
+    @property
+    def n_qualities(self):
+        return self._n_qualities
 
     @property
     def keep_original(self):
@@ -665,7 +700,8 @@ class Job(GObject.GObject):
         self._start_time = 0
         self._tempOutput = None
         self._volume_increase = config.volume_increase
-        self._audio_quality = config.audio_quality
+        self._audio_encoder = config.audio_encoder
+        self._audio_quality = config.audio_encoder_quality
         self._remove_subtitles = config.remove_subtitles
         self._keep_original = config.keep_original
         self._output_prefix = config.output_prefix
@@ -707,8 +743,8 @@ class Job(GObject.GObject):
 
         self._start_time = time.time()
 
-        ffmpeg = FfmpegLauncher(self._file_name, self._tempOutput, self._volume_increase, self._audio_quality,
-                                self._remove_subtitles, self._duration)
+        ffmpeg = FfmpegLauncher(self._file_name, self._tempOutput, self._volume_increase, self._audio_encoder,
+                                self._audio_quality, self._remove_subtitles, self._duration)
         ffmpeg.connect('update_state', self._update_conversion_state)
         ffmpeg.connect('finished', self._conversion_finished)
         ffmpeg.connect('finished_with_error', self._manage_error)
@@ -1110,13 +1146,14 @@ class FfmpegLauncher(ProcessLauncher):
     def finished_with_error(self, error, remove_temp_output):
         pass
 
-    def __init__(self, file_name: str, temp_output: str, volume_increase: float, audio_quality: float,
-                 remove_subtitles: bool, duration: float):
+    def __init__(self, file_name: str, temp_output: str, volume_increase: float, audio_encoder: str,
+                 audio_quality: float, remove_subtitles: bool, duration: float):
         self._error = False
         self._duration = duration
         self._cmd = config.ffmpeg_increase_audio_cmd.format(video_file_name_input=file_name,
                                                             video_file_name_output=temp_output,
                                                             volume_increase=volume_increase,
+                                                            audio_encoder=audio_encoder,
                                                             audio_quality=audio_quality,
                                                             remove_subtitles_param='-sn' if remove_subtitles else '')
         super().__init__(self._cmd)
@@ -1149,8 +1186,6 @@ class Preferences(Gtk.Window):
     def __init__(self):
         super().__init__()
         self._vol_increase_decimals = 1
-        self._audio_quality_decimals = 1
-        self._audio_quality_max = 10
         self._separator_margin = 5
         self.set_title('Preferences')
         self.set_border_width(10)
@@ -1178,22 +1213,30 @@ class Preferences(Gtk.Window):
         self._grid.attach_next_to(self._vol_increase_label, self._sep1, Gtk.PositionType.BOTTOM, 1, 1)
         self._grid.attach_next_to(self._vol_increase_spin, self._vol_increase_label, Gtk.PositionType.RIGHT, 1, 1)
 
+        self._audio_encoder_label = Gtk.Label(label='Audio encoder: ')
+        self._audio_encoder_combo = Gtk.ComboBoxText()
+        for i, enc in enumerate(config.audio_encoders):
+            self._audio_encoder_combo.append_text(enc)
+            if enc == config.audio_encoder:
+                self._audio_encoder_combo.set_active(i)
+        self._grid.attach_next_to(self._audio_encoder_label, self._vol_increase_label, Gtk.PositionType.BOTTOM, 1, 1)
+        self._grid.attach_next_to(self._audio_encoder_combo, self._audio_encoder_label, Gtk.PositionType.RIGHT, 1, 1)
+
         self._audio_quality_label = Gtk.Label(label='Audio quality: ')
-        self._audio_quality_scale = Gtk.Scale(digits=self._audio_quality_decimals,
-                                              orientation=Gtk.Orientation.HORIZONTAL,
-                                              adjustment=Gtk.Adjustment(value=float(self._audio_quality_max -
-                                                                                    config.audio_quality),
-                                                                        lower=0.1,
-                                                                        upper=10,
-                                                                        step_increment=0.1,
-                                                                        page_increment=0.5,
-                                                                        page_size=0.0))
-        self._audio_quality_scale.set_draw_value(False)
         self._audio_quality_label.set_margin_bottom(27)  # FIXME. How to center the label?
-        self._audio_quality_scale.add_mark(value=3, position=Gtk.PositionType.BOTTOM, markup='Low')
-        self._audio_quality_scale.add_mark(value=6, position=Gtk.PositionType.BOTTOM, markup='Default')
-        self._audio_quality_scale.add_mark(value=8, position=Gtk.PositionType.BOTTOM, markup='High')
-        self._grid.attach_next_to(self._audio_quality_label, self._vol_increase_label, Gtk.PositionType.BOTTOM, 1, 1)
+        self._audio_quality_scale = Gtk.Scale(orientation=Gtk.Orientation.HORIZONTAL,
+                                              adjustment=Gtk.Adjustment(value=config.audio_quality,
+                                                                        lower=0,
+                                                                        upper=config.n_qualities - 1,
+                                                                        step_increment=1,
+                                                                        page_increment=1,
+                                                                        page_size=0))
+        self._audio_quality_scale.set_draw_value(False)
+        self._audio_quality_scale.add_mark(value=0, position=Gtk.PositionType.BOTTOM, markup='Min')
+        for i in range(1, config.n_qualities - 1):
+            self._audio_quality_scale.add_mark(value=i, position=Gtk.PositionType.BOTTOM)
+        self._audio_quality_scale.add_mark(value=config.n_qualities - 1, position=Gtk.PositionType.BOTTOM, markup='Max')
+        self._grid.attach_next_to(self._audio_quality_label, self._audio_encoder_label, Gtk.PositionType.BOTTOM, 1, 1)
         self._grid.attach_next_to(self._audio_quality_scale, self._audio_quality_label, Gtk.PositionType.RIGHT, 1, 1)
 
         self._sep2 = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
@@ -1273,12 +1316,26 @@ class Preferences(Gtk.Window):
             self._output_prefix_entry.set_sensitive(False)
             self._output_suffix_entry.set_sensitive(False)
 
+        self._changed_value_id = self._audio_quality_scale.connect('change-value', self._on_audio_quality_change_value)
         self._use_all_cpus_toggle.connect('toggled', self._on_max_jobs_toggled)
         self._keep_original_toggle.connect('toggled', self._on_keep_original_toggled)
 
         self.add(self._grid)
         self.show_all()
         self.connect('destroy', self._on_destroy)
+
+    def _on_audio_quality_change_value(self, _scale, scroll_type, value):
+        """
+        Allows only discrete values for the Gtk.Scale widget.
+        https://stackoverflow.com/questions/39013193/is-there-an-official-way-to-create-discrete-valued-range-widget-in-gtk
+        """
+        # find the closest valid value
+        value = min(range(config.n_qualities), key=lambda v: abs(value-v))
+        # emit a new signal with the new value
+        self._audio_quality_scale.handler_block(self._changed_value_id)
+        self._audio_quality_scale.emit('change-value', scroll_type, value)
+        self._audio_quality_scale.handler_unblock(self._changed_value_id)
+        return True  # prevent the signal from escalating
 
     def _on_max_jobs_toggled(self, toggle: Gtk.ToggleButton):
         if toggle.get_active():
@@ -1303,10 +1360,8 @@ class Preferences(Gtk.Window):
         config.video_extensions = tuple(self._video_ext_entry.get_text().split(','))
         config.remove_subtitles = self._remove_subtitles_toggle.get_active()
         config.volume_increase = round(self._vol_increase_spin.get_value(), self._vol_increase_decimals)
-        # Why self._audio_quality_max - value? Because 0 is the best quality and 9.9 the worst.
-        # See https://trac.ffmpeg.org/wiki/Encode/MP3
-        config.audio_quality = round(self._audio_quality_max - self._audio_quality_scale.get_value(),
-                                     self._audio_quality_decimals)
+        config.audio_encoder = self._audio_encoder_combo.get_active_text()
+        config.audio_quality = int(self._audio_quality_scale.get_value())
         config.use_all_cpus = self._use_all_cpus_toggle.get_active()
         config.keep_original = self._keep_original_toggle.get_active()
         config.output_prefix = self._output_prefix_entry.get_text()
