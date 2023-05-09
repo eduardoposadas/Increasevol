@@ -158,14 +158,9 @@ class Configuration:
                 temp_conf.write(configfile)
         except OSError:
             traceback.print_exc()
-            dialog = Gtk.MessageDialog(
-                message_type=Gtk.MessageType.ERROR,
-                buttons=Gtk.ButtonsType.CLOSE,
-                title='Error',
-                text='Error saving configuration',
-                secondary_text=traceback.format_exc()
-            )
-            dialog.run()
+            error_message(text='Error',
+                          secundary_text='Error saving configuration',
+                          modal=True)
 
     @property
     def file(self):
@@ -495,9 +490,7 @@ class FileExplorer(Gtk.VBox):
         iter_ = store.get_iter(tree_path)
         (path, is_dir) = store.get(iter_, self.COL_PATH, self.COL_IS_DIRECTORY)
         if not is_dir:
-            if path.lower().endswith(config.video_extensions):
-                self.emit('video_selected', path)
-            return
+            self.emit('video_selected', path)
         else:
             self._parent_dir = path
             self._locations_push(self._parent_dir)
@@ -839,9 +832,9 @@ class JobsQueue:
             return
 
         if self._is_queued_or_running(path):
-            self._error_message(text='Duplicated entry',
-                                secondary_text=f'Processing:\n{path}\n\n'
-                                               'There is already a queued or running entry with this path.')
+            error_message(text='Duplicated entry',
+                          secondary_text=f'Processing:\n{path}\n\n'
+                                         'There is already a queued or running entry with this path.')
         else:
             if self._n_running_jobs >= config.max_jobs:
                 self._queue_job(path)
@@ -885,21 +878,8 @@ class JobsQueue:
 
     def _finished_with_error_job(self, _job, path: str, error: str):
         self._finished_job(self, path)
-        self._error_message(text='Error processing file',
-                            secondary_text=f'Processing:\n{path}\n\nError:\n{error}')
-
-    def _error_message(self, text: str, secondary_text: str):
-        dialog = Gtk.MessageDialog(
-            message_type=Gtk.MessageType.ERROR,
-            buttons=Gtk.ButtonsType.CLOSE,
-            title='Error',
-            text=text,
-            secondary_text=secondary_text
-        )
-        # Allow user copy the error
-        dialog.get_message_area().foreach(lambda label: label.set_selectable(True))
-        dialog.show_all()
-        dialog.connect('response', lambda *d: dialog.destroy())
+        error_message(text='Error processing file',
+                      secondary_text=f'Processing:\n{path}\n\nError:\n{error}')
 
 
 class JobsListWidget(Gtk.ScrolledWindow):
@@ -944,6 +924,8 @@ class JobsListWidget(Gtk.ScrolledWindow):
                     continue
                 if path.lower().endswith(config.video_extensions):
                     jq.add_job(path)
+                else:
+                    error_message(text='Not a video file', secondary_text=f'File:\n{path}')
             elif os.path.isdir(path):
                 for root, dirs, files in os.walk(path, topdown=False, followlinks=True):
                     for name in files:
@@ -953,7 +935,10 @@ class JobsListWidget(Gtk.ScrolledWindow):
                             jq.add_job(os.path.join(root, name))
 
     def add_job_from_path(self, _object, path: str):
-        jq.add_job(path)
+        if path.lower().endswith(config.video_extensions):
+            jq.add_job(path)
+        else:
+            error_message(text='Not a video file', secondary_text=f'File:\n{path}')
 
     def _add_columns(self, treeview):
         # column for file names
@@ -1571,26 +1556,36 @@ class Application(Gtk.Application):
         Preferences()
 
 
+def error_message(text: str, secondary_text: str, modal: bool = False):
+    dialog = Gtk.MessageDialog(
+        message_type=Gtk.MessageType.ERROR,
+        buttons=Gtk.ButtonsType.CLOSE,
+        title='Error',
+        text=text,
+        secondary_text=secondary_text
+    )
+    dialog.connect('response', lambda *d: dialog.destroy())
+    dialog.get_message_area().foreach(lambda label: label.set_selectable(True))  # Allow user copy dialog's text
+    if modal:
+        dialog.run()
+    else:
+        dialog.show_all()
+
+
 def check_prerequisites():
     """Check commands in config.required_cmd tuple are in PATH."""
     error = False
-    error_str = ''
+    missing_commands = ''
     for cmd in config.required_cmd:
         if shutil.which(cmd) is None:
             error = True
-            error_str += f'\n{cmd}'
+            missing_commands += f'\n{cmd}'
 
     if error:
-        error_str = f'Missing commands:{error_str}'
-        dialog = Gtk.MessageDialog(
-            message_type=Gtk.MessageType.ERROR,
-            buttons=Gtk.ButtonsType.CLOSE,
-            title='Error',
-            text='Does not meet the prerequisites',
-            secondary_text=error_str
-        )
-        dialog.run()
-        raise SystemExit(error_str)
+        error_message(text='Does not meet the prerequisites. Install:',
+                      secondary_text=missing_commands,
+                      modal=True)
+        raise SystemExit(missing_commands)
 
 
 if __name__ == '__main__':
