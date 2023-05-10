@@ -384,34 +384,34 @@ class FileExplorer(Gtk.VBox):
         # create the store and fill it with content
         self._pixbuf_lookup = {}
         self._store = self._create_store()
-        self.fill_store()
+        self._fill_store()
 
         self._tool_bar = Gtk.Toolbar()
         self.pack_start(self._tool_bar, False, False, 0)
 
-        self._back_button = Gtk.ToolButton(stock_id=Gtk.STOCK_GO_BACK)
-        self._back_button.set_is_important(True)
+        self._back_button = Gtk.ToolButton(icon_name='go-previous')
         self._back_button.set_sensitive(False)
         self._tool_bar.insert(self._back_button, -1)
 
-        self._forward_button = Gtk.ToolButton(stock_id=Gtk.STOCK_GO_FORWARD)
-        self._forward_button.set_is_important(True)
+        self._forward_button = Gtk.ToolButton(icon_name='go-next')
         self._forward_button.set_sensitive(False)
         self._tool_bar.insert(self._forward_button, -1)
 
-        self._up_button = Gtk.ToolButton(stock_id=Gtk.STOCK_GO_UP)
-        self._up_button.set_is_important(True)
+        self._up_button = Gtk.ToolButton(icon_name='go-up')
         self._up_button.set_sensitive(self._parent_dir != '/')  # FIXME: This is not portable.
         self._tool_bar.insert(self._up_button, -1)
 
-        self._home_button = Gtk.ToolButton(stock_id=Gtk.STOCK_HOME)
-        self._home_button.set_is_important(True)
+        self._refresh_button = Gtk.ToolButton(icon_name='view-refresh')
+        self._tool_bar.insert(self._refresh_button, -1)
+
+        self._home_button = Gtk.ToolButton(icon_name='go-home')
         self._tool_bar.insert(self._home_button, -1)
 
-        self._back_button.connect('clicked', self._back_clicked, self._store)
-        self._forward_button.connect('clicked', self._forward_clicked, self._store)
-        self._up_button.connect('clicked', self._up_clicked, self._store)
-        self._home_button.connect('clicked', self._home_clicked, self._store)
+        self._back_button.connect('clicked', self._back_clicked)
+        self._forward_button.connect('clicked', self._forward_clicked)
+        self._up_button.connect('clicked', self._up_clicked)
+        self._refresh_button.connect('clicked', self.refresh_clicked)
+        self._home_button.connect('clicked', self._home_clicked)
 
         self._separator = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
         self.pack_start(self._separator, False, False, 0)
@@ -468,20 +468,24 @@ class FileExplorer(Gtk.VBox):
         self._locations_push(self._parent_dir)
         self._refresh(self._parent_dir)
 
-    def _back_clicked(self, _item, _store):
+    def refresh_clicked(self, _item):
+        """It is used in AppWindow"""
+        self._fill_store()
+
+    def _back_clicked(self, _item):
         self._parent_dir = self._locations_pop()
         self._refresh(self._parent_dir)
 
-    def _forward_clicked(self, _item, _store):
+    def _forward_clicked(self, _item):
         self._parent_dir = self._locations_forward()
         self._refresh(self._parent_dir)
 
-    def _up_clicked(self, _item, _store):
+    def _up_clicked(self, _item):
         self._parent_dir = os.path.split(self._parent_dir)[0]
         self._locations_push(self._parent_dir)
         self._refresh(self._parent_dir)
 
-    def _home_clicked(self, _item, _store):
+    def _home_clicked(self, _item):
         self._parent_dir = GLib.get_home_dir()
         self._locations_push(self._parent_dir)
         self._refresh(self._parent_dir)
@@ -497,11 +501,11 @@ class FileExplorer(Gtk.VBox):
             self._refresh(self._parent_dir)
 
     def _refresh(self, path: str):
-        self.fill_store()
+        self._fill_store()
         self._location_label.set_label(path)
         self._up_button.set_sensitive(path != '/')  # FIXME: This is not portable.
 
-    # Methods for back and forward buttons
+    # Methods for the locations stack for "back" and "forward" buttons
     def _locations_init(self, path: str):
         self._locations_showed_element = 1
         self._locations.append(path)
@@ -626,8 +630,7 @@ class FileExplorer(Gtk.VBox):
 
         return pixbuf
 
-    def fill_store(self):
-        """Refresh the panel content. It is used in AppWindow"""
+    def _fill_store(self):
         self._store.clear()
         for name in os.listdir(self._parent_dir):
             if config.file_expl_show_hidden_files or not name.startswith('.'):  # FIXME: This is not portable.
@@ -813,13 +816,19 @@ class Job(GObject.GObject):
         self.emit('job_finished_with_error', self._file_name, error)
 
 
-class JobsQueue:
+class JobsQueue(GObject.GObject):
     """
     Class instantiated in main. Controls the number of jobs running at
     once based on config.max_jobs. If a job ends with error shows a
     window with the error text.
     """
+
+    @GObject.Signal()
+    def job_finished(self):
+        pass
+
     def __init__(self):
+        super().__init__()
         self._model = None
         self._n_running_jobs = 0
         self._jobs_queue = []
@@ -875,6 +884,7 @@ class JobsQueue:
     def _finished_job(self, _object, _path: str):
         self._n_running_jobs -= 1
         self.check_queue()
+        self.emit('job_finished')
 
     def _finished_with_error_job(self, _job, path: str, error: str):
         self._finished_job(self, path)
@@ -1452,6 +1462,7 @@ class AppWindow(Gtk.ApplicationWindow):
 
         self._places.connect('open-location', self.file_exp.open_location_from_place_sidebar)
         self.file_exp.connect('video_selected', self._jobsListWidget.add_job_from_path)
+        jq.connect('job_finished',  self.file_exp.refresh_clicked)
 
         self._paned_file_exp = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
         self._paned_file_exp.add1(self.file_exp)
@@ -1469,12 +1480,12 @@ class AppWindow(Gtk.ApplicationWindow):
     def _on_hidden_files_toggle(self, action: Gio.SimpleAction, value: bool):
         action.set_state(value)
         config.file_expl_show_hidden_files = value
-        self.file_exp.fill_store()
+        self.file_exp.refresh_clicked(None)
 
     def _on_case_sort_toggle(self, action: Gio.SimpleAction, value: bool):
         action.set_state(value)
         config.file_expl_case_insensitive_sort = value
-        self.file_exp.fill_store()
+        self.file_exp.refresh_clicked(None)
 
     def _on_single_click_toggle(self, action: Gio.SimpleAction, value: bool):
         action.set_state(value)
