@@ -56,7 +56,7 @@ class Configuration:
         self._use_all_cpus = True
         self._max_jobs = os.cpu_count()  # Only used if _use_all_cpus == False
         self._file_expl_show_hidden_files = False
-        self._file_expl_case_insensitive_sort = True
+        self._file_expl_case_sensitive_sort = False
         self._file_expl_activate_on_single_click = True
         self._temp_file_prefix = 'ffmpeg_temp_'
         self._ignore_temp_files = True
@@ -112,9 +112,9 @@ class Configuration:
         self._max_jobs = temp_conf.getint('DEFAULT', 'max_jobs', fallback=self._max_jobs)
         self._file_expl_show_hidden_files = temp_conf.getboolean('DEFAULT', 'file_explorer_show_hidden_files',
                                                                  fallback=self._file_expl_show_hidden_files)
-        self._file_expl_case_insensitive_sort = temp_conf.getboolean('DEFAULT',
-                                                                     'file_explorer_case_insensitive_sort',
-                                                                     fallback=self._file_expl_case_insensitive_sort)
+        self._file_expl_case_sensitive_sort = temp_conf.getboolean('DEFAULT',
+                                                                   'file_explorer_case_sensitive_sort',
+                                                                   fallback=self._file_expl_case_sensitive_sort)
         self._file_expl_activate_on_single_click = temp_conf.getboolean('DEFAULT',
                                                                         'file_explorer_activate_on_single_click',
                                                                         fallback=
@@ -143,7 +143,7 @@ class Configuration:
             'use_all_cpus': self._use_all_cpus,
             'max_jobs': self._max_jobs,
             'file_explorer_show_hidden_files': self._file_expl_show_hidden_files,
-            'file_explorer_case_insensitive_sort': self._file_expl_case_insensitive_sort,
+            'file_explorer_case_sensitive_sort': self._file_expl_case_sensitive_sort,
             'file_explorer_activate_on_single_click': self._file_expl_activate_on_single_click,
             'temp_file_prefix': self._temp_file_prefix,
             'ignore_temp_files': self._ignore_temp_files,
@@ -287,12 +287,12 @@ class Configuration:
         self._file_expl_show_hidden_files = val
 
     @property
-    def file_expl_case_insensitive_sort(self):
-        return self._file_expl_case_insensitive_sort
+    def file_expl_case_sensitive_sort(self):
+        return self._file_expl_case_sensitive_sort
 
-    @file_expl_case_insensitive_sort.setter
-    def file_expl_case_insensitive_sort(self, val: bool):
-        self._file_expl_case_insensitive_sort = val
+    @file_expl_case_sensitive_sort.setter
+    def file_expl_case_sensitive_sort(self, val: bool):
+        self._file_expl_case_sensitive_sort = val
 
     @property
     def file_expl_undo_size(self):
@@ -564,7 +564,7 @@ class FileExplorer(Gtk.VBox):
         elif a_is_dir and (not b_is_dir):
             return -1
         else:
-            if config.file_expl_case_insensitive_sort:
+            if not config.file_expl_case_sensitive_sort:
                 a_name = a_name.lower()
                 b_name = b_name.lower()
             if a_name > b_name:
@@ -1388,8 +1388,8 @@ MENU_XML = """
         <attribute name="label" translatable="yes">Show hidden files</attribute>
       </item>
       <item>
-        <attribute name="action">win.file_expl_case_insensitive_sort</attribute>
-        <attribute name="label" translatable="yes">Case insensitive sort</attribute>
+        <attribute name="action">win.file_expl_case_sensitive_sort</attribute>
+        <attribute name="label" translatable="yes">Case sensitive sort</attribute>
       </item>
       <item>
         <attribute name="action">win.file_expl_single_click</attribute>
@@ -1435,7 +1435,7 @@ class AppWindow(Gtk.ApplicationWindow):
         self.add_action(file_exp_hidden_files_action)
 
         file_exp_case_sort_action = Gio.SimpleAction.new_stateful(
-            "file_expl_case_insensitive_sort", None, GLib.Variant.new_boolean(config.file_expl_case_insensitive_sort)
+            "file_expl_case_sensitive_sort", None, GLib.Variant.new_boolean(config.file_expl_case_sensitive_sort)
         )
         file_exp_case_sort_action.connect("change-state", self._on_case_sort_toggle)
         self.add_action(file_exp_case_sort_action)
@@ -1484,7 +1484,7 @@ class AppWindow(Gtk.ApplicationWindow):
 
     def _on_case_sort_toggle(self, action: Gio.SimpleAction, value: bool):
         action.set_state(value)
-        config.file_expl_case_insensitive_sort = value
+        config.file_expl_case_sensitive_sort = value
         self.file_exp.refresh_clicked(None)
 
     def _on_single_click_toggle(self, action: Gio.SimpleAction, value: bool):
