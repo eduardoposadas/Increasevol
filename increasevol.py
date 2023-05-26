@@ -60,7 +60,7 @@ class Configuration:
         self._file_expl_activate_on_single_click = True
         self._temp_file_prefix = 'ffmpeg_temp_'
         self._ignore_temp_files = True
-        # Do not change configuration options below this
+        # Do not change configuration options below this line
         self._file = os.path.join(os.path.expanduser("~"), '.config', 'increasevol')  # FIXME: This is not portable.
         self._required_cmd = ('ffprobe', 'ffmpeg')
         self._cwd = GLib.get_home_dir()
@@ -69,15 +69,16 @@ class Configuration:
         self._win_height = 309
         self._file_expl_undo_size = 100  # Stack size for "back" button
         self._paned_file_expl_position = 400
-        """audio_encoder_quality:
-        Key: ffmpeg audio encoder
+        """ audio_encoder_quality:
+        Key: ffmpeg audio encoder (audio_encoder in _ffmpeg_increase_audio_cmd)
         Value: list with valid quality values for the audio encoder, from lowest to highest quality
-        """
+               (audio_quality in _ffmpeg_increase_audio_cmd) """
         self._audio_encoder_quality = {
             'mp3':       [9.9,   8, 5,   3,  0],  # https://trac.ffmpeg.org/wiki/Encode/MP3
             'aac':       [0.1, 0.5, 1, 1.5,  2],  # https://trac.ffmpeg.org/wiki/Encode/AAC
             'libvorbis': [0,   2.5, 5, 7.5, 10],  # https://ffmpeg.org/ffmpeg-codecs.html#libvorbis
-            # 'eac3': [],
+            'flac':      [0,     0, 0,   0,  0],  # https://ffmpeg.org/ffmpeg-codecs.html#flac-2 (flac doesn't have -q)
+            # 'libopus': [],
         }
         self._n_qualities = len(self._audio_encoder_quality[self._audio_encoder])
         self._ffprobe_get_duration_cmd = 'ffprobe -v error -show_entries format=duration ' \
@@ -317,6 +318,10 @@ class Configuration:
     @property
     def ignore_temp_files(self):
         return self._ignore_temp_files
+
+    @ignore_temp_files.setter
+    def ignore_temp_files(self, val: bool):
+        self._ignore_temp_files = val
 
     @property
     def ffprobe_get_duration_cmd(self):
@@ -633,11 +638,13 @@ class FileExplorer(Gtk.VBox):
     def _fill_store(self):
         self._store.clear()
         for name in os.listdir(self._parent_dir):
-            if config.file_expl_show_hidden_files or not name.startswith('.'):  # FIXME: This is not portable.
-                path = os.path.join(self._parent_dir, name)
-                is_dir = os.path.isdir(path)
-                pixbuf = self._file_to_icon_pixbuf(path)
-                self._store.append([path, name, pixbuf, is_dir])
+            if ((config.ignore_temp_files and name.startswith(config.temp_file_prefix)) or
+                    (not config.file_expl_show_hidden_files and name.startswith('.'))):  # FIXME: This is not portable.
+                continue
+            path = os.path.join(self._parent_dir, name)
+            is_dir = os.path.isdir(path)
+            pixbuf = self._file_to_icon_pixbuf(path)
+            self._store.append([path, name, pixbuf, is_dir])
 
 
 @unique
@@ -1295,9 +1302,14 @@ class Preferences(Gtk.Window):
         self._sep5.set_margin_bottom(self._separator_margin)
         self._grid.attach_next_to(self._sep5, self._output_suffix_label, Gtk.PositionType.BOTTOM, 2, 1)
 
+        self._ignore_temp_files_label = Gtk.Label(label='Ignore temporal files: ')
+        self._ignore_temp_files_toggle = Gtk.CheckButton(active=config.ignore_temp_files)
+        self._grid.attach_next_to(self._ignore_temp_files_label, self._sep5, Gtk.PositionType.BOTTOM, 1, 1)
+        self._grid.attach_next_to(self._ignore_temp_files_toggle, self._ignore_temp_files_label, Gtk.PositionType.RIGHT, 1, 1)
+
         self._temp_file_prefix_label = Gtk.Label(label='Temporal file prefix: ')
         self._temp_file_prefix_entry = Gtk.Entry(text=config.temp_file_prefix)
-        self._grid.attach_next_to(self._temp_file_prefix_label, self._sep5, Gtk.PositionType.BOTTOM, 1, 1)
+        self._grid.attach_next_to(self._temp_file_prefix_label, self._ignore_temp_files_label, Gtk.PositionType.BOTTOM, 1, 1)
         self._grid.attach_next_to(self._temp_file_prefix_entry, self._temp_file_prefix_label, Gtk.PositionType.RIGHT, 1,
                                   1)
         # Avoid selection of _video_ext_entry text
@@ -1366,6 +1378,7 @@ class Preferences(Gtk.Window):
         config.keep_original = self._keep_original_toggle.get_active()
         config.output_prefix = self._output_prefix_entry.get_text()
         config.output_suffix = self._output_suffix_entry.get_text()
+        config.ignore_temp_files = self._ignore_temp_files_toggle.get_active()
         config.temp_file_prefix = self._temp_file_prefix_entry.get_text()
         self.destroy()
 
