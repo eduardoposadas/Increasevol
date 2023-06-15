@@ -160,7 +160,7 @@ class Configuration:
         except OSError:
             traceback.print_exc()
             error_message(text='Error',
-                          secundary_text='Error saving configuration',
+                          secondary_text='Error saving configuration',
                           modal=True)
 
     @property
@@ -369,7 +369,7 @@ class FileExplorer(Gtk.VBox):
      COL_IS_DIRECTORY,
      NUM_COLS) = range(5)
 
-    @GObject.Signal(arg_types=(str,))
+    @GObject.Signal(arg_types=[str, ])
     def video_selected(self, path):
         pass
 
@@ -422,6 +422,7 @@ class FileExplorer(Gtk.VBox):
         self.pack_start(self._separator, False, False, 0)
 
         self._location_label = Gtk.Label(label=self._parent_dir)
+        self._location_label.set_selectable(True)
         self._location_label.set_xalign(0)
         self._location_label.set_ellipsize(Pango.EllipsizeMode.START)
         self._location_label.set_margin_top(5)
@@ -665,13 +666,22 @@ job_status_pixbuf = {
     JobStatus.FINISHED: 'emblem-ok-symbolic'
 }
 
-# Column names for the Gtk.TreeView model in JobsListWidget
+# Column names for the Gtk.ListStore model in JobsListWidget
 # Used in classes: Job, JobsQueue and JobsListWidget
-(JOB_LIST_COLUMN_FILENAME,
+# Only fields with COLUMN are displayed
+(JOB_LIST_ID,
+ JOB_LIST_COLUMN_FILENAME,
  JOB_LIST_COLUMN_STATUS,
  JOB_LIST_COLUMN_PROGRESS,
  JOB_LIST_COLUMN_ESTTIME,
- JOB_LIST_NUM_COLUMNS) = range(5)
+ JOB_LIST_START_TIME,
+ JOB_LIST_END_TIME,
+ JOB_LIST_ERROR_STRING,
+ JOB_LIST_VOLUME_INC,
+ JOB_LIST_AUDIO_ENC,
+ JOB_LIST_KEEP_ORIGINAL,
+ JOB_LIST_NUM_COLUMNS
+ ) = range(12)
 
 
 class Job(GObject.GObject):
@@ -683,24 +693,27 @@ class Job(GObject.GObject):
        output line, this class update the job state showed in JobsListWidget.
     """
 
-    @GObject.Signal(arg_types=(str,))
+    @GObject.Signal(arg_types=[str, ])
     def job_finished(self, path):
         pass
 
-    @GObject.Signal(arg_types=(str, str,))
+    @GObject.Signal(arg_types=[str, str, ])
     def job_finished_with_error(self, path, error):
         pass
 
     def __init__(self,
+                 id_: int,
                  file_name: str = '',
                  model: Gtk.ListStore = None):
         super().__init__()
-        self._file_name = file_name
+        self.id_ = id_
+        self.file_name = file_name
         self._model = model
+        self._ffprobe = None
+        self._ffmpeg = None
 
-        self._list_row = self._model.append()
+        self._row = self._model.append()
         self._duration = 0
-        self._start_time = 0
         self._tempOutput = None
         self._volume_increase = config.volume_increase
         self._audio_encoder = config.audio_encoder
@@ -712,28 +725,41 @@ class Job(GObject.GObject):
         self._temp_file_prefix = config.temp_file_prefix
 
         # Update the jobs list widget
-        self._model[self._list_row][JOB_LIST_COLUMN_FILENAME] = self._file_name
-        self._model[self._list_row][JOB_LIST_COLUMN_STATUS] = job_status_pixbuf[JobStatus.QUEUED]
-        self._model[self._list_row][JOB_LIST_COLUMN_PROGRESS] = 0
-        self._model[self._list_row][JOB_LIST_COLUMN_ESTTIME] = ''
+        self._model[self._row][JOB_LIST_COLUMN_FILENAME] = self.file_name
+        self._model[self._row][JOB_LIST_COLUMN_STATUS] = job_status_pixbuf[JobStatus.QUEUED]
+        self._model[self._row][JOB_LIST_COLUMN_PROGRESS] = 0
+        self._model[self._row][JOB_LIST_COLUMN_ESTTIME] = ''
+
+        # Update hidden model fields
+        self._model[self._row][JOB_LIST_ID] = self.id_
+        self._model[self._row][JOB_LIST_START_TIME] = 0
+        self._model[self._row][JOB_LIST_END_TIME] = 0
+        self._model[self._row][JOB_LIST_AUDIO_ENC] = self._audio_encoder
+        self._model[self._row][JOB_LIST_VOLUME_INC] = self._volume_increase
+        self._model[self._row][JOB_LIST_KEEP_ORIGINAL] = self._keep_original
+        self._model[self._row][JOB_LIST_ERROR_STRING] = ''
+
+    # def __del__(self):
+    #     print(f'__del__ Job id: {self.id_}')
 
     def get_duration(self):
         """Launch ffprobe to get video duration. This method is the first step of the chain."""
-        self._model[self._list_row][JOB_LIST_COLUMN_STATUS] = job_status_pixbuf[JobStatus.RUNNING]
-        ffprobe = FfprobeLauncher(self._file_name)
-        ffprobe.connect('finished', self._increase_volume)
-        ffprobe.connect('finished_with_error', self._manage_error)
-        GLib.idle_add(ffprobe.run)
+        self._model[self._row][JOB_LIST_COLUMN_STATUS] = job_status_pixbuf[JobStatus.RUNNING]
+        self._ffprobe = FfprobeLauncher(self.file_name)
+        self._ffprobe.connect('finished', self._increase_volume)
+        self._ffprobe.connect('finished_with_error', self._manage_error)
+        GLib.idle_add(self._ffprobe.run)
 
     def _increase_volume(self, _object, duration: float):
         """Launch ffmpeg to increase the volume."""
+        self._ffprobe = None
         self._duration = duration
         if self._duration == 0:
             return
 
         # Choose temporary output file
-        suffix = os.path.splitext(self._file_name)[1]
-        directory = os.path.dirname(self._file_name)
+        suffix = os.path.splitext(self.file_name)[1]
+        directory = os.path.dirname(self.file_name)
         try:
             handle, self._tempOutput = tempfile.mkstemp(dir=directory,
                                                         suffix=suffix,
@@ -744,40 +770,42 @@ class Job(GObject.GObject):
         else:
             os.close(handle)
 
-        self._start_time = time.time()
+        self._model[self._row][JOB_LIST_START_TIME] = time.time()
 
-        ffmpeg = FfmpegLauncher(self._file_name, self._tempOutput, self._volume_increase, self._audio_encoder,
-                                self._audio_quality, self._remove_subtitles, self._duration)
-        ffmpeg.connect('update_state', self._update_conversion_state)
-        ffmpeg.connect('finished', self._conversion_finished)
-        ffmpeg.connect('finished_with_error', self._manage_error)
-        GLib.idle_add(ffmpeg.run)
+        self._ffmpeg = FfmpegLauncher(self.file_name, self._tempOutput, self._volume_increase, self._audio_encoder,
+                                      self._audio_quality, self._remove_subtitles, self._duration)
+        self._ffmpeg.connect('update_state', self._update_conversion_state)
+        self._ffmpeg.connect('finished', self._conversion_finished)
+        self._ffmpeg.connect('finished_with_error', self._manage_error)
+        GLib.idle_add(self._ffmpeg.run)
 
     def _update_conversion_state(self, _object, progress_percent: float):
         if progress_percent == 0:
             est_remaining = 0
         else:
-            spent_time = time.time() - self._start_time
+            spent_time = time.time() - self._model[self._row][JOB_LIST_START_TIME]
             est_remaining = spent_time * (100 - progress_percent) / progress_percent
         m, s = divmod(int(est_remaining), 60)
         h, m = divmod(m, 60)
         est_remaining_str = f'{h:02d}:{m:02d}:{s:02d}'
 
-        self._model[self._list_row][JOB_LIST_COLUMN_PROGRESS] = progress_percent
-        self._model[self._list_row][JOB_LIST_COLUMN_ESTTIME] = est_remaining_str
+        self._model[self._row][JOB_LIST_COLUMN_PROGRESS] = progress_percent
+        self._model[self._row][JOB_LIST_COLUMN_ESTTIME] = est_remaining_str
 
     def _conversion_finished(self, _object):
-        self._model[self._list_row][JOB_LIST_COLUMN_STATUS] = job_status_pixbuf[JobStatus.FINISHED]
-        self._model[self._list_row][JOB_LIST_COLUMN_PROGRESS] = 100
+        self._ffmpeg = None
+        self._model[self._row][JOB_LIST_COLUMN_STATUS] = job_status_pixbuf[JobStatus.FINISHED]
+        self._model[self._row][JOB_LIST_COLUMN_PROGRESS] = 100
+        self._model[self._row][JOB_LIST_END_TIME] = time.time()
 
-        spent_time = time.time() - self._start_time
+        spent_time = self._model[self._row][JOB_LIST_END_TIME] - self._model[self._row][JOB_LIST_START_TIME]
         m, s = divmod(int(spent_time), 60)
         h, m = divmod(m, 60)
         spent_time_str = f'{h:02d}:{m:02d}:{s:02d}'
-        self._model[self._list_row][JOB_LIST_COLUMN_ESTTIME] = f'Total: {spent_time_str}'
+        self._model[self._row][JOB_LIST_COLUMN_ESTTIME] = f'Total: {spent_time_str}'
 
         if self._keep_original:
-            directory, name = os.path.split(self._file_name)
+            directory, name = os.path.split(self.file_name)
             name, ext = os.path.splitext(name)
             name = directory + os.sep + self._output_prefix + name + self._output_suffix + ext
             if os.path.exists(name):
@@ -789,38 +817,48 @@ class Job(GObject.GObject):
                 except Exception as e:
                     self._manage_error(None, f'Error renaming "{self._tempOutput}" to\n"{name}":\n\n{str(e)}', False)
                 finally:
-                    self.emit('job_finished', self._file_name)
+                    self.emit('job_finished', self.file_name)
         else:
             # self._keep_original == False
             try:
-                os.remove(self._file_name)
+                os.remove(self.file_name)
             except Exception as e:
-                self._manage_error(None, f'Error removing "{self._file_name}"\n'
+                self._manage_error(None, f'Error removing "{self.file_name}"\n'
                                          f'Preserving temporal output file:\n'
                                          f'"{self._tempOutput}"\n\n'
                                          f'{str(e)}',
                                    False)
             else:
                 try:
-                    os.rename(self._tempOutput, self._file_name)
+                    os.rename(self._tempOutput, self.file_name)
                 except Exception as e:
                     self._manage_error(None, f'Error renaming "{self._tempOutput}" to\n'
-                                             f'"{self._file_name}":\n\n'
+                                             f'"{self.file_name}":\n\n'
                                              f'{str(e)}',
                                        False)
                 finally:
-                    self.emit('job_finished', self._file_name)
+                    self.emit('job_finished', self.file_name)
 
     def _manage_error(self, _object, error: str, remove_temp_output: bool):
-        self._model[self._list_row][JOB_LIST_COLUMN_STATUS] = job_status_pixbuf[JobStatus.FAILED]
-        self._model[self._list_row][JOB_LIST_COLUMN_ESTTIME] = '--:--:--'
+        self._ffprobe = None
+        self._ffmpeg = None
+        self._model[self._row][JOB_LIST_COLUMN_STATUS] = job_status_pixbuf[JobStatus.FAILED]
+        self._model[self._row][JOB_LIST_COLUMN_ESTTIME] = '--:--:--'
+        self._model[self._row][JOB_LIST_END_TIME] = time.time()
+        self._model[self._row][JOB_LIST_ERROR_STRING] = error
 
         if remove_temp_output and self._tempOutput is not None and os.path.exists(self._tempOutput):
             try:
                 os.remove(self._tempOutput)
             except OSError:
                 pass
-        self.emit('job_finished_with_error', self._file_name, error)
+        self.emit('job_finished_with_error', self.file_name, error)
+
+    def kill(self):
+        if self._ffprobe is not None:
+            self._ffprobe.kill()
+        if self._ffmpeg is not None:
+            self._ffmpeg.kill()
 
 
 class JobsQueue(GObject.GObject):
@@ -837,8 +875,9 @@ class JobsQueue(GObject.GObject):
     def __init__(self):
         super().__init__()
         self._model = None
-        self._n_running_jobs = 0
-        self._jobs_queue = []
+        self._job_id = 0
+        self._job_queue = []
+        self._running_jobs = []
 
     def set_model(self, model: Gtk.ListStore):
         self._model = model
@@ -852,49 +891,93 @@ class JobsQueue(GObject.GObject):
                           secondary_text=f'Processing:\n{path}\n\n'
                                          'There is already a queued or running entry with this path.')
         else:
-            if self._n_running_jobs >= config.max_jobs:
+            if len(self._running_jobs) >= config.max_jobs:
                 self._queue_job(path)
             else:
                 self._launch_job(path)
 
+    def remove_jobs(self, job_id_list: list):
+        for row in self._model:
+            id_ = row[JOB_LIST_ID]
+            if id_ in job_id_list:
+                job_id_list.remove(id_)
+                status = row[JOB_LIST_COLUMN_STATUS]
+                if (status == job_status_pixbuf[JobStatus.FAILED] or
+                        status == job_status_pixbuf[JobStatus.FINISHED]):
+                    self._model.remove(row.iter)
+                elif status == job_status_pixbuf[JobStatus.QUEUED]:
+                    # remove job from queue
+                    [self._job_queue.remove(j) for j in self._job_queue if j.id_ == id_]
+                    self._model.remove(row.iter)
+                elif status == job_status_pixbuf[JobStatus.RUNNING]:
+                    pass
+                    # self._kill_job(id_)
+                    # self._model.remove(row.iter)
+                else:
+                    raise ValueError('Unexpected status')
+
+    def force_launch_queued_jobs(self, job_id_list: list):
+        for job in [j for j in self._job_queue if j.id_ in job_id_list]:
+            self._job_queue.remove(job)
+            self._running_jobs.append(job)
+            job.get_duration()
+
+    def launch_again_failed_jobs(self, job_id_list: list):
+        [self.add_job(i[JOB_LIST_COLUMN_FILENAME]) for i in self._model if i[JOB_LIST_ID] in job_id_list]
+        # for i in self._model:
+        #     if i[JOB_LIST_ID] in job_id_list:
+        #         self.add_job(i[JOB_LIST_COLUMN_FILENAME])
+        #         job_id_list.remove(i[JOB_LIST_ID])
+        #         if not job_id_list:
+        #             return
+
+    def kill_jobs(self, job_id_list: list):
+        [job.kill() for job in self._running_jobs if job.id_ in job_id_list]
+        # for job in [j for j in self._running_jobs if j.id_ in job_id_list]:
+        #     job.kill()
+
     def check_queue(self):
-        while len(self._jobs_queue) > 0 and self._n_running_jobs < config.max_jobs:
-            self._unqueue_job()
+        while len(self._job_queue) > 0 and len(self._running_jobs) < config.max_jobs:
+            self._dequeue_job()
 
-    def _is_queued_or_running(self, path: str):
-        for i in self._model:
-            if (i[JOB_LIST_COLUMN_FILENAME] == path and
-                    (i[JOB_LIST_COLUMN_STATUS] == job_status_pixbuf[JobStatus.QUEUED] or
-                     i[JOB_LIST_COLUMN_STATUS] == job_status_pixbuf[JobStatus.RUNNING])):
-                return True
+    def _is_queued_or_running(self, path: str) -> bool:
+        path_list = [job.file_name for job in self._running_jobs] + \
+                    [job.file_name for job in self._job_queue]
+        if path in path_list:
+            return True
+        else:
+            return False
 
-        return False
+    def _next_job_id(self) -> int:
+        id_ = self._job_id
+        self._job_id += 1
+        return id_
 
     def _launch_job(self, path: str):
-        j = Job(file_name=path, model=self._model)
+        j = Job(id_=self._next_job_id(), file_name=path, model=self._model)
         j.connect('job_finished', self._finished_job)
         j.connect('job_finished_with_error', self._finished_with_error_job)
-        self._n_running_jobs += 1
+        self._running_jobs.append(j)
         j.get_duration()
 
     def _queue_job(self, path: str):
-        j = Job(file_name=path, model=self._model)
+        j = Job(id_=self._next_job_id(), file_name=path, model=self._model)
         j.connect('job_finished', self._finished_job)
         j.connect('job_finished_with_error', self._finished_with_error_job)
-        self._jobs_queue.append(j)
+        self._job_queue.append(j)
 
-    def _unqueue_job(self):
-        self._n_running_jobs += 1
-        j = self._jobs_queue.pop(0)
+    def _dequeue_job(self):
+        j = self._job_queue.pop(0)
+        self._running_jobs.append(j)
         j.get_duration()
 
-    def _finished_job(self, _object, _path: str):
-        self._n_running_jobs -= 1
+    def _finished_job(self, job, _path: str):
+        self._running_jobs.remove(job)
         self.check_queue()
         self.emit('job_finished')
 
-    def _finished_with_error_job(self, _job, path: str, error: str):
-        self._finished_job(self, path)
+    def _finished_with_error_job(self, job, path: str, error: str):
+        self._finished_job(job, path)
         error_message(text='Error processing file',
                       secondary_text=f'Processing:\n{path}\n\nError:\n{error}')
 
@@ -904,6 +987,12 @@ class JobsListWidget(Gtk.ScrolledWindow):
     The right panel is a jobs list made with Gtk.TreeView.
     Modified from:
     https://github.com/GNOME/pygobject/blob/master/examples/demo/demos/TreeView/liststore.py
+    Tooltip general idea:
+    https://athenajc.gitbooks.io/python-gtk-3-api/content/gtk-group/gtktooltip.html
+    Context menu idea:
+    https://docs.gtk.org/gtk3/treeview-tutorial.html#context-menus-on-right-click
+    How to make dynamic menus using Gio.Menu (Gtk.Menu is deprecated):
+    https://discourse.gnome.org/t/how-to-create-menus-for-apps-using-python/2413/22
     """
 
     def __init__(self):
@@ -912,13 +1001,48 @@ class JobsListWidget(Gtk.ScrolledWindow):
         self.set_shadow_type(Gtk.ShadowType.ETCHED_IN)
         self.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
 
-        self._model = Gtk.ListStore(str,
+        self._model = Gtk.ListStore(int,
                                     str,
-                                    GObject.TYPE_INT,
-                                    str)
-        self._treeview = Gtk.TreeView(model=self._model)
+                                    str,
+                                    int,
+                                    str,
+                                    float,
+                                    float,
+                                    str,
+                                    int,
+                                    str,
+                                    bool)
+        self._treeview = Gtk.TreeView(model=self._model, rubber_banding=True, has_tooltip=True)
         self._treeview.set_search_column(JOB_LIST_COLUMN_FILENAME)
+        self._add_columns(self._treeview)
         self.add(self._treeview)
+
+        self._tv_selection = self._treeview.get_selection()
+        self._tv_selection.set_mode(Gtk.SelectionMode.MULTIPLE)
+
+        self._remove_queued_action = Gio.SimpleAction(name="remove_queued", parameter_type=None, enabled=True)
+        self._remove_failed_action = Gio.SimpleAction(name="remove_failed", parameter_type=None, enabled=True)
+        self._remove_finished_action = Gio.SimpleAction(name="remove_finished", parameter_type=None, enabled=True)
+        self._launch_queued_action = Gio.SimpleAction(name="launch_queued", parameter_type=None, enabled=True)
+        self._launch_failed_action = Gio.SimpleAction(name="launch_failed", parameter_type=None, enabled=True)
+        self._stop_action = Gio.SimpleAction(name="stop", parameter_type=None, enabled=True)
+        self._remove_queued_action_handler = None
+        self._remove_failed_action_handler = None
+        self._remove_finished_action_handler = None
+        self._launch_queued_action_handler = None
+        self._launch_failed_action_handler = None
+        self._stop_action_handler = None
+        self._action_group = Gio.SimpleActionGroup()
+        self._action_group.add_action(self._remove_queued_action)
+        self._action_group.add_action(self._remove_failed_action)
+        self._action_group.add_action(self._remove_finished_action)
+        self._action_group.add_action(self._launch_queued_action)
+        self._action_group.add_action(self._launch_failed_action)
+        self._action_group.add_action(self._stop_action)
+        self._treeview.insert_action_group('app', self._action_group)
+
+        self._treeview.connect('button-press-event', self._on_button_press)
+        self._treeview.connect('query-tooltip', self._on_query_tooltip)
 
         self._treeview.enable_model_drag_dest([], Gdk.DragAction.COPY)
         self._treeview.drag_dest_add_uri_targets()
@@ -926,7 +1050,235 @@ class JobsListWidget(Gtk.ScrolledWindow):
 
         jq.set_model(self._model)
 
-        self._add_columns(self._treeview)
+    def _on_button_press(self, widget, event):
+        # single click with the right mouse button?
+        if event.type == Gdk.EventType.BUTTON_PRESS and event.button == 3:
+            self._view_popup_menu(widget, event)
+            return Gdk.EVENT_STOP
+        return Gdk.EVENT_PROPAGATE
+
+    def _view_popup_menu(self, _widget, event):
+        # path, column, cell_x, cell_y = self._treeview.get_path_at_pos(event.x, event.y)
+        returned_tuple = self._treeview.get_path_at_pos(event.x, event.y)
+        if returned_tuple is None:
+            return
+        path, *_ = returned_tuple
+        n_selected = self._tv_selection.count_selected_rows()
+        popover_menu = Gio.Menu()
+
+        #  If one or no rows are selected or
+        #  multiple rows are selected but the mouse is not over a selected row
+        if (n_selected <= 1 or
+                (n_selected > 1 and not self._tv_selection.path_is_selected(path))):
+            id_, file_name, status = self._model.get(self._model.get_iter(path),
+                                                     JOB_LIST_ID,
+                                                     JOB_LIST_COLUMN_FILENAME,
+                                                     JOB_LIST_COLUMN_STATUS)
+            file_name = file_name.replace('_', '__')  # Avoid use _ as menu accelerator mark
+            if status == job_status_pixbuf[JobStatus.QUEUED]:
+                popover_menu.append(f'Remove from queue {file_name}', 'app.remove_queued')
+                popover_menu.append(f'Launch now {file_name}', 'app.launch_queued')
+            elif status == job_status_pixbuf[JobStatus.FAILED]:
+                popover_menu.append(f'Remove from list {file_name}', 'app.remove_queued')  # jq.remove_jobs works
+                popover_menu.append(f'Launch again {file_name}', 'app.launch_failed')
+            elif status == job_status_pixbuf[JobStatus.FINISHED]:
+                popover_menu.append(f'Remove from list {file_name}', 'app.remove_queued')
+            elif status == job_status_pixbuf[JobStatus.RUNNING]:
+                popover_menu.append(f'Stop processing {file_name}', 'app.stop')
+            else:
+                raise ValueError('Unexpected status')
+            if self._remove_queued_action_handler is not None:
+                self._remove_queued_action.disconnect(self._remove_queued_action_handler)
+            self._remove_queued_action_handler = self._remove_queued_action.connect("activate",
+                                                                                    lambda a, p: jq.remove_jobs([id_]))
+            if self._launch_queued_action_handler is not None:
+                self._launch_queued_action.disconnect(self._launch_queued_action_handler)
+            self._launch_queued_action_handler = self._launch_queued_action.connect("activate",
+                                                                                    lambda a, p: jq.force_launch_queued_jobs([id_]))
+            if self._launch_failed_action_handler is not None:
+                self._launch_failed_action.disconnect(self._launch_failed_action_handler)
+            self._launch_failed_action_handler = self._launch_failed_action.connect("activate",
+                                                                                    lambda a, p: jq.launch_again_failed_jobs([id_]))
+            if self._stop_action_handler is not None:
+                self._stop_action.disconnect(self._stop_action_handler)
+            self._stop_action_handler = self._stop_action.connect("activate", lambda a, p: jq.kill_jobs([id_]))
+        else:
+            # Several rows are selected and the mouse is over a selected row.
+            queued_jobs = []
+            running_jobs = []
+            failed_jobs = []
+            finished_jobs = []
+            for row_path in self._tv_selection.get_selected_rows()[1]:
+                id_, status = self._model.get(self._model.get_iter(row_path), JOB_LIST_ID, JOB_LIST_COLUMN_STATUS)
+                if status == job_status_pixbuf[JobStatus.QUEUED]:
+                    queued_jobs.append(id_)
+                elif status == job_status_pixbuf[JobStatus.RUNNING]:
+                    running_jobs.append(id_)
+                elif status == job_status_pixbuf[JobStatus.FAILED]:
+                    failed_jobs.append(id_)
+                elif status == job_status_pixbuf[JobStatus.FINISHED]:
+                    finished_jobs.append(id_)
+                else:
+                    raise ValueError('Unexpected status')
+
+            if len(queued_jobs) > 0:
+                section = Gio.Menu()
+                section.append('Remove queued jobs from queue', 'app.remove_queued')
+                section.append('Launch queued jobs now', 'app.launch_queued')
+                popover_menu.append_section(label='Queued jobs', section=section)
+            if len(failed_jobs) > 0:
+                section = Gio.Menu()
+                section.append('Remove failed jobs from list', 'app.remove_failed')
+                section.append('Launch failed jobs again', 'app.launch_failed')
+                popover_menu.append_section(label='Failed jobs', section=section)
+            if len(finished_jobs) > 0:
+                section = Gio.Menu()
+                section.append('Remove finished jobs from list', 'app.remove_finished')
+                popover_menu.append_section(label='Finished jobs', section=section)
+            if len(running_jobs) > 0:
+                section = Gio.Menu()
+                section.append('Stop processing running jobs', 'app.stop')
+                popover_menu.append_section(label='Running jobs', section=section)
+
+            if self._remove_queued_action_handler is not None:
+                self._remove_queued_action.disconnect(self._remove_queued_action_handler)
+            self._remove_queued_action_handler = self._remove_queued_action.connect("activate",
+                                                                                    lambda a, p: jq.remove_jobs(queued_jobs))
+            if self._remove_failed_action_handler is not None:
+                self._remove_failed_action.disconnect(self._remove_failed_action_handler)
+            self._remove_failed_action_handler = self._remove_failed_action.connect("activate",
+                                                                                    lambda a, p: jq.remove_jobs(failed_jobs))
+            if self._remove_finished_action_handler is not None:
+                self._remove_finished_action.disconnect(self._remove_finished_action_handler)
+            self._remove_finished_action_handler = self._remove_finished_action.connect("activate",
+                                                                                        lambda a, p: jq.remove_jobs(finished_jobs))
+            if self._launch_queued_action_handler is not None:
+                self._launch_queued_action.disconnect(self._launch_queued_action_handler)
+            self._launch_queued_action_handler = self._launch_queued_action.connect("activate",
+                                                                                    lambda a, p: jq.force_launch_queued_jobs(queued_jobs))
+            if self._launch_failed_action_handler is not None:
+                self._launch_failed_action.disconnect(self._launch_failed_action_handler)
+            self._launch_failed_action_handler = self._launch_failed_action.connect("activate",
+                                                                                    lambda a, p: jq.launch_again_failed_jobs(failed_jobs))
+            if self._stop_action_handler is not None:
+                self._stop_action.disconnect(self._stop_action_handler)
+            self._stop_action_handler = self._stop_action.connect("activate", lambda a, p: jq.kill_jobs(running_jobs))
+
+        popover = Gtk.Popover.new_from_model(relative_to=self._treeview, model=popover_menu)
+        popover.set_position(Gtk.PositionType.BOTTOM)
+        rect = Gdk.Rectangle()
+        rect.x = event.x
+        rect.y = event.y + 20
+        rect.width = rect.height = 1
+        popover.set_pointing_to(rect)
+        popover.popup()
+
+    def _on_query_tooltip(self, widget, x, y, keyboard_mode, tooltip):
+        # success, cellx, celly, model, path, iter_ = widget.get_tooltip_context(x, y, keyboard_mode)
+        success, *_, iter_ = widget.get_tooltip_context(x, y, keyboard_mode)
+        if not success:
+            return False
+        n_selected = self._tv_selection.count_selected_rows()
+
+        #  If one or no rows are selected or
+        #  multiple rows are selected but the mouse is not over a selected row
+        if (n_selected <= 1 or
+                (n_selected > 1 and not self._tv_selection.iter_is_selected(iter_))):
+            row = self._model[iter_]
+            file_name = row[JOB_LIST_COLUMN_FILENAME]
+            audio_enc = row[JOB_LIST_AUDIO_ENC]
+            volume_inc = row[JOB_LIST_VOLUME_INC]
+            keep_original = row[JOB_LIST_KEEP_ORIGINAL]
+
+            status = row[JOB_LIST_COLUMN_STATUS]
+            if status == job_status_pixbuf[JobStatus.QUEUED]:
+                status_str = "Queued"
+            elif status == job_status_pixbuf[JobStatus.RUNNING]:
+                status_str = "Running"
+            elif status == job_status_pixbuf[JobStatus.FAILED]:
+                status_str = "Failed"
+            elif status == job_status_pixbuf[JobStatus.FINISHED]:
+                status_str = "Finished"
+            else:
+                raise ValueError('Unexpected status')
+
+            start_time = row[JOB_LIST_START_TIME]
+            start_time_str = ''
+            end_time_str = ''
+            if start_time != 0:
+                status_str += '\n'
+                start_time = time.localtime(row[JOB_LIST_START_TIME])
+                start_time_str = f'Start time: {start_time.tm_hour:02d}:'\
+                                 f'{start_time.tm_min:02d}:'\
+                                 f'{start_time.tm_sec:02d}'
+
+                end_time = row[JOB_LIST_END_TIME]
+                if end_time != 0:
+                    start_time_str += '\n'
+                    end_time = time.localtime(row[JOB_LIST_END_TIME])
+                    end_time_str = f'End time: {end_time.tm_hour:02d}:'\
+                                   f'{end_time.tm_min:02d}:'\
+                                   f'{end_time.tm_sec:02d}'
+
+            error_string = row[JOB_LIST_ERROR_STRING]
+            if error_string != '':
+                end_time_str += '\n'
+                error_string = f'Error: {error_string}'
+
+            tooltip.set_text(f'File: {file_name}\nKeep Original: {keep_original}\nAudio encoder: {audio_enc}\nVolume increase: {volume_inc}\n'
+                             f'Status: {status_str}{start_time_str}{end_time_str}{error_string}')
+            return True
+
+        else:
+            # Several rows are selected and the mouse is over a selected row.
+            total_time = 0
+            total_finished_jobs = 0
+            start_time = float('+Infinity')
+            end_time = 0
+            for row_path in self._tv_selection.get_selected_rows()[1]:
+                status, start, end = self._model.get(self._model.get_iter(row_path),
+                                                     JOB_LIST_COLUMN_STATUS,
+                                                     JOB_LIST_START_TIME,
+                                                     JOB_LIST_END_TIME)
+                if status == job_status_pixbuf[JobStatus.FINISHED]:
+                    total_time += end - start
+                    total_finished_jobs += 1
+                    if start < start_time:
+                        start_time = start
+                    if end > end_time:
+                        end_time = end
+
+            if total_finished_jobs == 0:
+                start_time_str = '00:00:00'
+                end_time_str = '00:00:00'
+                elapsed_time_str = '00:00:00'
+                accumulated_time_str = '00:00:00'
+                avg_str = '00:00:00'
+            else:
+                m, s = divmod(int(end_time - start_time), 60)
+                h, m = divmod(m, 60)
+                elapsed_time_str = f'{h:02d}:{m:02d}:{s:02d}'
+                start_time = time.localtime(start_time)
+                start_time_str = f'{start_time.tm_hour:02d}:'\
+                                 f'{start_time.tm_min:02d}:'\
+                                 f'{start_time.tm_sec:02d}'
+                end_time = time.localtime(end_time)
+                end_time_str = f'{end_time.tm_hour:02d}:'\
+                               f'{end_time.tm_min:02d}:'\
+                               f'{end_time.tm_sec:02d}'
+                m, s = divmod(int(total_time), 60)
+                h, m = divmod(m, 60)
+                accumulated_time_str = f'{h:02d}:{m:02d}:{s:02d}'
+                m, s = divmod(int(total_time / total_finished_jobs), 60)
+                h, m = divmod(m, 60)
+                avg_str = f'{h:02d}:{m:02d}:{s:02d}'
+
+            tooltip.set_text(f'Start time: {start_time_str}\n'
+                             f'End time: {end_time_str}\n'
+                             f'Elapsed time: {elapsed_time_str}\n'
+                             f'Total accumulated time: {accumulated_time_str}\n'
+                             f'Average completion time: {avg_str}')
+            return True
 
     def _on_drag_data_received(self, _widget, _drag_context, _x, _y, data, _info, _time_str):
         for uri in data.get_uris():
@@ -1104,11 +1456,11 @@ class ProcessLauncher(GObject.GObject):
 
 
 class FfprobeLauncher(ProcessLauncher):
-    @GObject.Signal(arg_types=(float,))
+    @GObject.Signal(arg_types=[float, ])
     def finished(self, duration):
         pass
 
-    @GObject.Signal(arg_types=(str, bool,))
+    @GObject.Signal(arg_types=[str, bool, ])
     def finished_with_error(self, error, remove_temp_output):
         pass
 
@@ -1141,7 +1493,7 @@ class FfprobeLauncher(ProcessLauncher):
 
 
 class FfmpegLauncher(ProcessLauncher):
-    @GObject.Signal(arg_types=(float,))
+    @GObject.Signal(arg_types=[float, ])
     def update_state(self, progress):
         pass
 
@@ -1149,7 +1501,7 @@ class FfmpegLauncher(ProcessLauncher):
     def finished(self):
         pass
 
-    @GObject.Signal(arg_types=(str, bool,))
+    @GObject.Signal(arg_types=[str, bool, ])
     def finished_with_error(self, error, remove_temp_output):
         pass
 
@@ -1520,22 +1872,22 @@ class AppWindow(Gtk.ApplicationWindow):
 
 
 class Application(Gtk.Application):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, application_id="org.example.myapp", **kwargs)
+    def __init__(self):
+        super().__init__(application_id="org.example.myapp")
         self.window = None
 
     def do_startup(self):
         Gtk.Application.do_startup(self)
 
-        preferences_action = Gio.SimpleAction.new("preferences", None)
+        preferences_action = Gio.SimpleAction(name="preferences", parameter_type=None, enabled=True)
         preferences_action.connect("activate", self._on_preferences)
         self.add_action(preferences_action)
 
-        about_action = Gio.SimpleAction.new("about", None)
+        about_action = Gio.SimpleAction(name="about", parameter_type=None, enabled=True)
         about_action.connect("activate", self._on_about)
         self.add_action(about_action)
 
-        quit_action = Gio.SimpleAction.new("quit", None)
+        quit_action = Gio.SimpleAction(name="quit", parameter_type=None, enabled=True)
         quit_action.connect("activate", self._on_quit)
         self.add_action(quit_action)
 
