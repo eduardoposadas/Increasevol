@@ -33,11 +33,10 @@ import configparser
 import urllib.parse
 import urllib.request
 import gi
-
-gi.require_version('Gtk', '3.0')
-gi.require_version('Gdk', '3.0')
-gi.require_version('Pango', '1.0')
-gi.require_version('GdkPixbuf', '2.0')
+gi.require_version('Gtk', '3.0')  # noqa: E402
+gi.require_version('Gdk', '3.0')  # noqa: E402
+gi.require_version('Pango', '1.0')  # noqa: E402
+gi.require_version('GdkPixbuf', '2.0')  # noqa: E402
 from gi.repository import GObject, GLib, Gio, GdkPixbuf, Pango, Gdk, Gtk
 
 
@@ -680,8 +679,9 @@ job_status_pixbuf = {
  JOB_LIST_VOLUME_INC,
  JOB_LIST_AUDIO_ENC,
  JOB_LIST_KEEP_ORIGINAL,
+ JOB_LIST_OUTPUT_FILE,
  JOB_LIST_NUM_COLUMNS
- ) = range(12)
+ ) = range(13)
 
 
 class Job(GObject.GObject):
@@ -708,6 +708,7 @@ class Job(GObject.GObject):
         super().__init__()
         self.id_ = id_
         self.file_name = file_name
+        self._output_file_name = ''
         self._model = model
         self._ffprobe = None
         self._ffmpeg = None
@@ -737,14 +738,17 @@ class Job(GObject.GObject):
         self._model[self._row][JOB_LIST_AUDIO_ENC] = self._audio_encoder
         self._model[self._row][JOB_LIST_VOLUME_INC] = self._volume_increase
         self._model[self._row][JOB_LIST_KEEP_ORIGINAL] = self._keep_original
+        self._model[self._row][JOB_LIST_OUTPUT_FILE] = self._output_file_name
         self._model[self._row][JOB_LIST_ERROR_STRING] = ''
 
     # def __del__(self):
-    #     print(f'__del__ Job id: {self.id_}')
+    #     print(f'__del__ Job id: {self.id_} file: {self.file_name}')
 
     def get_duration(self):
         """Launch ffprobe to get video duration. This method is the first step of the chain."""
         self._model[self._row][JOB_LIST_COLUMN_STATUS] = job_status_pixbuf[JobStatus.RUNNING]
+        self._model[self._row][JOB_LIST_START_TIME] = time.time()
+
         self._ffprobe = FfprobeLauncher(self.file_name)
         self._ffprobe.connect('finished', self._increase_volume)
         self._ffprobe.connect('finished_with_error', self._manage_error)
@@ -756,6 +760,16 @@ class Job(GObject.GObject):
         self._duration = duration
         if self._duration == 0:
             return
+
+        # Check output name doesn't exist if user wants to keep the original file
+        if self._keep_original:
+            directory, name = os.path.split(self.file_name)
+            name, ext = os.path.splitext(name)
+            self._output_file_name = directory + os.sep + self._output_prefix + name + self._output_suffix + ext
+            self._model[self._row][JOB_LIST_OUTPUT_FILE] = self._output_file_name
+            if os.path.exists(self._output_file_name):
+                self._manage_error(None, f'Output file "{self._output_file_name}" exists.', False)
+                return
 
         # Choose temporary output file
         suffix = os.path.splitext(self.file_name)[1]
@@ -769,8 +783,6 @@ class Job(GObject.GObject):
             return
         else:
             os.close(handle)
-
-        self._model[self._row][JOB_LIST_START_TIME] = time.time()
 
         self._ffmpeg = FfmpegLauncher(self.file_name, self._tempOutput, self._volume_increase, self._audio_encoder,
                                       self._audio_quality, self._remove_subtitles, self._duration)
@@ -805,17 +817,16 @@ class Job(GObject.GObject):
         self._model[self._row][JOB_LIST_COLUMN_ESTTIME] = f'Total: {spent_time_str}'
 
         if self._keep_original:
-            directory, name = os.path.split(self.file_name)
-            name, ext = os.path.splitext(name)
-            name = directory + os.sep + self._output_prefix + name + self._output_suffix + ext
-            if os.path.exists(name):
-                self._manage_error(None, f'File "{name}" exists.\nNot renaming "{self._tempOutput}" to\n"{name}"',
+            if os.path.exists(self._output_file_name):
+                self._manage_error(None, f'File "{self._output_file_name}" exists.\n'
+                                         f'Not renaming "{self._tempOutput}" to\n"{self._output_file_name}"',
                                    False)
             else:
                 try:
-                    os.rename(self._tempOutput, name)
+                    os.rename(self._tempOutput, self._output_file_name)
                 except Exception as e:
-                    self._manage_error(None, f'Error renaming "{self._tempOutput}" to\n"{name}":\n\n{str(e)}', False)
+                    self._manage_error(None, f'Error renaming "{self._tempOutput}" to\n'
+                                             f'"{self._output_file_name}":\n\n{str(e)}', False)
                 finally:
                     self.emit('job_finished', self.file_name)
         else:
@@ -1011,7 +1022,8 @@ class JobsListWidget(Gtk.ScrolledWindow):
                                     str,
                                     int,
                                     str,
-                                    bool)
+                                    bool,
+                                    str)
         self._treeview = Gtk.TreeView(model=self._model, rubber_banding=True, has_tooltip=True)
         self._treeview.set_search_column(JOB_LIST_COLUMN_FILENAME)
         self._add_columns(self._treeview)
@@ -1188,7 +1200,12 @@ class JobsListWidget(Gtk.ScrolledWindow):
             file_name = row[JOB_LIST_COLUMN_FILENAME]
             audio_enc = row[JOB_LIST_AUDIO_ENC]
             volume_inc = row[JOB_LIST_VOLUME_INC]
+
             keep_original = row[JOB_LIST_KEEP_ORIGINAL]
+            if not keep_original:
+                output_file_name_str = ''
+            else:
+                output_file_name_str = f'Output file:\t\t{row[JOB_LIST_OUTPUT_FILE]}\n'
 
             status = row[JOB_LIST_COLUMN_STATUS]
             if status == job_status_pixbuf[JobStatus.QUEUED]:
@@ -1208,7 +1225,7 @@ class JobsListWidget(Gtk.ScrolledWindow):
             if start_time != 0:
                 status_str += '\n'
                 start_time = time.localtime(row[JOB_LIST_START_TIME])
-                start_time_str = f'Start time: {start_time.tm_hour:02d}:'\
+                start_time_str = f'Start time:\t\t\t{start_time.tm_hour:02d}:'\
                                  f'{start_time.tm_min:02d}:'\
                                  f'{start_time.tm_sec:02d}'
 
@@ -1216,17 +1233,21 @@ class JobsListWidget(Gtk.ScrolledWindow):
                 if end_time != 0:
                     start_time_str += '\n'
                     end_time = time.localtime(row[JOB_LIST_END_TIME])
-                    end_time_str = f'End time: {end_time.tm_hour:02d}:'\
+                    end_time_str = f'End time:\t\t\t{end_time.tm_hour:02d}:'\
                                    f'{end_time.tm_min:02d}:'\
                                    f'{end_time.tm_sec:02d}'
 
             error_string = row[JOB_LIST_ERROR_STRING]
             if error_string != '':
                 end_time_str += '\n'
-                error_string = f'Error: {error_string}'
+                error_string = f'Error:\n{error_string}'
 
-            tooltip.set_text(f'File: {file_name}\nKeep Original: {keep_original}\nAudio encoder: {audio_enc}\nVolume increase: {volume_inc}\n'
-                             f'Status: {status_str}{start_time_str}{end_time_str}{error_string}')
+            tooltip.set_text(f'File:\t\t\t\t{file_name}\n'
+                             f'Keep Original:\t\t{keep_original}\n'
+                             f'{output_file_name_str}'
+                             f'Audio encoder:\t{audio_enc}\n'
+                             f'Volume increase:\t{volume_inc}\n'
+                             f'Status:\t\t\t\t{status_str}{start_time_str}{end_time_str}{error_string}')
             return True
 
         else:
@@ -1273,11 +1294,12 @@ class JobsListWidget(Gtk.ScrolledWindow):
                 h, m = divmod(m, 60)
                 avg_str = f'{h:02d}:{m:02d}:{s:02d}'
 
-            tooltip.set_text(f'Start time: {start_time_str}\n'
-                             f'End time: {end_time_str}\n'
-                             f'Elapsed time: {elapsed_time_str}\n'
-                             f'Total accumulated time: {accumulated_time_str}\n'
-                             f'Average completion time: {avg_str}')
+            tooltip.set_text(f'Statistics of {total_finished_jobs} completed jobs:\n'
+                             f'Start time:\t\t\t\t\t{start_time_str}\n'
+                             f'End time:\t\t\t\t\t{end_time_str}\n'
+                             f'Elapsed time:\t\t\t\t{elapsed_time_str}\n'
+                             f'Total accumulated time:\t{accumulated_time_str}\n'
+                             f'Average completion time:\t{avg_str}')
             return True
 
     def _on_drag_data_received(self, _widget, _drag_context, _x, _y, data, _info, _time_str):
