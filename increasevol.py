@@ -22,6 +22,7 @@
 
 import os
 import sys
+import math
 from enum import Enum, unique
 import shlex
 import shutil
@@ -486,7 +487,7 @@ class FileExplorer(Gtk.VBox):
         self._refresh(self._parent_dir)
 
     def _up_clicked(self, _item):
-        self._parent_dir = os.path.split(self._parent_dir)[0]
+        self._parent_dir = os.path.dirname(self._parent_dir)
         self._locations_push(self._parent_dir)
         self._refresh(self._parent_dir)
 
@@ -1086,6 +1087,7 @@ class JobsListWidget(Gtk.ScrolledWindow):
                                                      JOB_LIST_ID,
                                                      JOB_LIST_COLUMN_FILENAME,
                                                      JOB_LIST_COLUMN_STATUS)
+            file_name = os.path.basename(file_name)
             file_name = file_name.replace('_', '__')  # Avoid use _ as menu accelerator mark
             if status == job_status_pixbuf[JobStatus.QUEUED]:
                 popover_menu.append(f'Remove from queue {file_name}', 'app.remove_queued')
@@ -1197,7 +1199,7 @@ class JobsListWidget(Gtk.ScrolledWindow):
         if (n_selected <= 1 or
                 (n_selected > 1 and not self._tv_selection.iter_is_selected(iter_))):
             row = self._model[iter_]
-            file_name = row[JOB_LIST_COLUMN_FILENAME]
+            file_name = os.path.basename(row[JOB_LIST_COLUMN_FILENAME])
             audio_enc = row[JOB_LIST_AUDIO_ENC]
             volume_inc = row[JOB_LIST_VOLUME_INC]
 
@@ -1205,7 +1207,8 @@ class JobsListWidget(Gtk.ScrolledWindow):
             if not keep_original:
                 output_file_name_str = ''
             else:
-                output_file_name_str = f'Output file:\t\t{row[JOB_LIST_OUTPUT_FILE]}\n'
+                output_file_name = os.path.basename(row[JOB_LIST_OUTPUT_FILE])
+                output_file_name_str = f'Output file:\t\t{output_file_name}\n'
 
             status = row[JOB_LIST_COLUMN_STATUS]
             if status == job_status_pixbuf[JobStatus.QUEUED]:
@@ -1252,54 +1255,86 @@ class JobsListWidget(Gtk.ScrolledWindow):
 
         else:
             # Several rows are selected and the mouse is over a selected row.
-            total_time = 0
+            total_queued_jobs = 0
             total_finished_jobs = 0
+            total_running_jobs = 0
+            total_time = 0
             start_time = float('+Infinity')
             end_time = 0
+            est_time = 0
             for row_path in self._tv_selection.get_selected_rows()[1]:
-                status, start, end = self._model.get(self._model.get_iter(row_path),
-                                                     JOB_LIST_COLUMN_STATUS,
-                                                     JOB_LIST_START_TIME,
-                                                     JOB_LIST_END_TIME)
+                status, est_time_str, start, end = self._model.get(self._model.get_iter(row_path),
+                                                                   JOB_LIST_COLUMN_STATUS,
+                                                                   JOB_LIST_COLUMN_ESTTIME,
+                                                                   JOB_LIST_START_TIME,
+                                                                   JOB_LIST_END_TIME)
                 if status == job_status_pixbuf[JobStatus.FINISHED]:
-                    total_time += end - start
                     total_finished_jobs += 1
+                    total_time += end - start
                     if start < start_time:
                         start_time = start
                     if end > end_time:
                         end_time = end
+
+                if status == job_status_pixbuf[JobStatus.RUNNING] and est_time_str != '':
+                    total_running_jobs += 1
+                    h, m, s = est_time_str.split(':')
+                    t = int(h) * 3600 + int(m) * 60 + int(s)
+                    if t > est_time:
+                        est_time = t
+
+                if status == job_status_pixbuf[JobStatus.QUEUED]:
+                    total_queued_jobs += 1
 
             if total_finished_jobs == 0:
                 start_time_str = '00:00:00'
                 end_time_str = '00:00:00'
                 elapsed_time_str = '00:00:00'
                 accumulated_time_str = '00:00:00'
-                avg_str = '00:00:00'
+                avg_time_str = '00:00:00'
+                est_end_time_queued_str = ''
             else:
                 m, s = divmod(int(end_time - start_time), 60)
                 h, m = divmod(m, 60)
                 elapsed_time_str = f'{h:02d}:{m:02d}:{s:02d}'
+
                 start_time = time.localtime(start_time)
                 start_time_str = f'{start_time.tm_hour:02d}:'\
                                  f'{start_time.tm_min:02d}:'\
                                  f'{start_time.tm_sec:02d}'
+
                 end_time = time.localtime(end_time)
                 end_time_str = f'{end_time.tm_hour:02d}:'\
                                f'{end_time.tm_min:02d}:'\
                                f'{end_time.tm_sec:02d}'
+
                 m, s = divmod(int(total_time), 60)
                 h, m = divmod(m, 60)
                 accumulated_time_str = f'{h:02d}:{m:02d}:{s:02d}'
-                m, s = divmod(int(total_time / total_finished_jobs), 60)
+
+                avg_time = total_time / total_finished_jobs
+                m, s = divmod(int(avg_time), 60)
                 h, m = divmod(m, 60)
-                avg_str = f'{h:02d}:{m:02d}:{s:02d}'
+                avg_time_str = f'{h:02d}:{m:02d}:{s:02d}'
+
+                if total_queued_jobs == 0 and total_running_jobs == 0:
+                    est_end_time_queued_str = ''
+                else:
+                    est_end_time_queued = (time.time() + est_time +
+                                           (avg_time * math.ceil(total_queued_jobs / config.max_jobs)))
+                    est_end_time_queued = time.localtime(est_end_time_queued)
+                    est_end_time_queued_str = f'\n\nEstimated end time:\t\t'\
+                                              f'{est_end_time_queued.tm_hour:02d}:'\
+                                              f'{est_end_time_queued.tm_min:02d}:'\
+                                              f'{est_end_time_queued.tm_sec:02d}'
 
             tooltip.set_text(f'Statistics of {total_finished_jobs} completed jobs:\n'
                              f'Start time:\t\t\t\t\t{start_time_str}\n'
                              f'End time:\t\t\t\t\t{end_time_str}\n'
                              f'Elapsed time:\t\t\t\t{elapsed_time_str}\n'
                              f'Total accumulated time:\t{accumulated_time_str}\n'
-                             f'Average completion time:\t{avg_str}')
+                             f'Average completion time:\t{avg_time_str}'
+                             f'{est_end_time_queued_str}')
             return True
 
     def _on_drag_data_received(self, _widget, _drag_context, _x, _y, data, _info, _time_str):
@@ -1545,10 +1580,8 @@ class FfmpegLauncher(ProcessLauncher):
             time_beg += 6
             time_end = line.find(' ', time_beg)
             time_str = line[time_beg:time_end]
-            time_list = time_str.split(':')
-            progress = (int(time_list[0]) * 3600 +
-                        int(time_list[1]) * 60 +
-                        float(time_list[2]))
+            h, m, s = time_str.split(':')
+            progress = int(h) * 3600 + int(m) * 60 + float(s)
             progress_percent = progress * 100 / self._duration
             self.emit('update_state', progress_percent)
 
@@ -1716,7 +1749,8 @@ class Preferences(Gtk.Window):
         https://stackoverflow.com/questions/39013193/is-there-an-official-way-to-create-discrete-valued-range-widget-in-gtk
         """
         # find the closest valid value
-        value = min(range(config.n_qualities), key=lambda v: abs(value-v))
+        # value = min(range(config.n_qualities), key=lambda v: abs(value-v))
+        value = round(value)
         # emit a new signal with the new value
         self._audio_quality_scale.handler_block(self._changed_value_id)
         self._audio_quality_scale.emit('change-value', scroll_type, value)
