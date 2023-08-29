@@ -28,6 +28,7 @@ import shlex
 import shutil
 import signal
 import time
+from collections import namedtuple
 import tempfile
 import traceback
 import configparser
@@ -39,6 +40,11 @@ gi.require_version('Gdk', '3.0')  # noqa: E402
 gi.require_version('Pango', '1.0')  # noqa: E402
 gi.require_version('GdkPixbuf', '2.0')  # noqa: E402
 from gi.repository import GObject, GLib, Gio, GdkPixbuf, Pango, Gdk, Gtk
+
+# time.struct_time with nanoseconds
+struct_time_ns = namedtuple('struct_time_ns',
+                            ['tm_year', 'tm_mon', 'tm_mday', 'tm_hour', 'tm_min', 'tm_sec', 'tm_wday',
+                             'tm_yday', 'tm_isdst', 'tm_ns'])
 
 
 class Configuration:
@@ -60,6 +66,7 @@ class Configuration:
         self._file_expl_activate_on_single_click = True
         self._temp_file_prefix = 'ffmpeg_temp_'
         self._ignore_temp_files = True
+        self._show_milliseconds = False
         # Do not change configuration options below this line
         self._file = os.path.join(os.path.expanduser("~"), '.config', 'increasevol')  # FIXME: This is not portable.
         self._required_cmd = ('ffprobe', 'ffmpeg')
@@ -122,6 +129,7 @@ class Configuration:
                                                                         self._file_expl_activate_on_single_click)
         self._temp_file_prefix = temp_conf.get('DEFAULT', 'temp_file_prefix', fallback=self._temp_file_prefix)
         self._ignore_temp_files = temp_conf.getboolean('DEFAULT', 'ignore_temp_files', fallback=self._ignore_temp_files)
+        self._show_milliseconds = temp_conf.getboolean('DEFAULT', 'show_milliseconds', fallback=self._show_milliseconds)
         self._paned_file_expl_position = temp_conf.getint('DEFAULT', 'paned_file_explorer_position',
                                                           fallback=self._paned_file_expl_position)
         self._win_maximized = temp_conf.getboolean('DEFAULT', 'win_maximized', fallback=self._win_maximized)
@@ -148,6 +156,7 @@ class Configuration:
             'file_explorer_activate_on_single_click': self._file_expl_activate_on_single_click,
             'temp_file_prefix': self._temp_file_prefix,
             'ignore_temp_files': self._ignore_temp_files,
+            'show_milliseconds': self._show_milliseconds,
             'paned_file_explorer_position': self._paned_file_expl_position,
             'win_maximized': self._win_maximized,
             'win_width': self._win_width,
@@ -164,15 +173,15 @@ class Configuration:
                           modal=True)
 
     @property
-    def file(self):
+    def file(self) -> str:
         return self._file
 
     @property
-    def required_cmd(self):
+    def required_cmd(self) -> tuple:
         return self._required_cmd
 
     @property
-    def cwd(self):
+    def cwd(self) -> str:
         return self._cwd
 
     @cwd.setter
@@ -180,7 +189,7 @@ class Configuration:
         self._cwd = val
 
     @property
-    def video_extensions(self):
+    def video_extensions(self) -> tuple:
         return self._video_extensions
 
     @video_extensions.setter
@@ -188,7 +197,7 @@ class Configuration:
         self._video_extensions = val
 
     @property
-    def remove_subtitles(self):
+    def remove_subtitles(self) -> bool:
         return self._remove_subtitles
 
     @remove_subtitles.setter
@@ -196,7 +205,7 @@ class Configuration:
         self._remove_subtitles = val
 
     @property
-    def volume_increase(self):
+    def volume_increase(self) -> float:
         return self._volume_increase
 
     @volume_increase.setter
@@ -204,7 +213,7 @@ class Configuration:
         self._volume_increase = val
 
     @property
-    def audio_encoder(self):
+    def audio_encoder(self) -> str:
         return self._audio_encoder
 
     @audio_encoder.setter
@@ -212,11 +221,11 @@ class Configuration:
         self._audio_encoder = val
 
     @property
-    def audio_encoders(self):
+    def audio_encoders(self) -> list:
         return list(self._audio_encoder_quality)
 
     @property
-    def audio_quality(self):
+    def audio_quality(self) -> int:
         return self._audio_quality
 
     @audio_quality.setter
@@ -224,15 +233,15 @@ class Configuration:
         self._audio_quality = val
 
     @property
-    def audio_encoder_quality(self):
+    def audio_encoder_quality(self) -> int:
         return self._audio_encoder_quality[self._audio_encoder][self._audio_quality]
 
     @property
-    def n_qualities(self):
+    def n_qualities(self) -> int:
         return self._n_qualities
 
     @property
-    def keep_original(self):
+    def keep_original(self) -> bool:
         return self._keep_original
 
     @keep_original.setter
@@ -240,7 +249,7 @@ class Configuration:
         self._keep_original = val
 
     @property
-    def output_prefix(self):
+    def output_prefix(self) -> str:
         return self._output_prefix
 
     @output_prefix.setter
@@ -248,7 +257,7 @@ class Configuration:
         self._output_prefix = val
 
     @property
-    def output_suffix(self):
+    def output_suffix(self) -> str:
         return self._output_suffix
 
     @output_suffix.setter
@@ -256,7 +265,7 @@ class Configuration:
         self._output_suffix = val
 
     @property
-    def use_all_cpus(self):
+    def use_all_cpus(self) -> bool:
         return self._use_all_cpus
 
     @use_all_cpus.setter
@@ -264,7 +273,7 @@ class Configuration:
         self._use_all_cpus = val
 
     @property
-    def max_jobs(self):
+    def max_jobs(self) -> int:
         return self._max_jobs
 
     @max_jobs.setter
@@ -272,7 +281,7 @@ class Configuration:
         self._max_jobs = val
 
     @property
-    def paned_file_expl_position(self):
+    def paned_file_expl_position(self) -> int:
         return self._paned_file_expl_position
 
     @paned_file_expl_position.setter
@@ -280,7 +289,7 @@ class Configuration:
         self._paned_file_expl_position = val
 
     @property
-    def file_expl_show_hidden_files(self):
+    def file_expl_show_hidden_files(self) -> bool:
         return self._file_expl_show_hidden_files
 
     @file_expl_show_hidden_files.setter
@@ -288,7 +297,7 @@ class Configuration:
         self._file_expl_show_hidden_files = val
 
     @property
-    def file_expl_case_sensitive_sort(self):
+    def file_expl_case_sensitive_sort(self) -> bool:
         return self._file_expl_case_sensitive_sort
 
     @file_expl_case_sensitive_sort.setter
@@ -296,11 +305,11 @@ class Configuration:
         self._file_expl_case_sensitive_sort = val
 
     @property
-    def file_expl_undo_size(self):
+    def file_expl_undo_size(self) -> int:
         return self._file_expl_undo_size
 
     @property
-    def file_expl_activate_on_single_click(self):
+    def file_expl_activate_on_single_click(self) -> bool:
         return self._file_expl_activate_on_single_click
 
     @file_expl_activate_on_single_click.setter
@@ -308,7 +317,7 @@ class Configuration:
         self._file_expl_activate_on_single_click = val
 
     @property
-    def temp_file_prefix(self):
+    def temp_file_prefix(self) -> str:
         return self._temp_file_prefix
 
     @temp_file_prefix.setter
@@ -316,7 +325,7 @@ class Configuration:
         self._temp_file_prefix = val
 
     @property
-    def ignore_temp_files(self):
+    def ignore_temp_files(self) -> bool:
         return self._ignore_temp_files
 
     @ignore_temp_files.setter
@@ -324,15 +333,23 @@ class Configuration:
         self._ignore_temp_files = val
 
     @property
-    def ffprobe_get_duration_cmd(self):
+    def show_milliseconds(self) -> bool:
+        return self._show_milliseconds
+
+    @show_milliseconds.setter
+    def show_milliseconds(self, val: bool):
+        self._show_milliseconds = val
+
+    @property
+    def ffprobe_get_duration_cmd(self) -> str:
         return self._ffprobe_get_duration_cmd
 
     @property
-    def ffmpeg_increase_audio_cmd(self):
+    def ffmpeg_increase_audio_cmd(self) -> str:
         return self._ffmpeg_increase_audio_cmd
 
     @property
-    def win_maximized(self):
+    def win_maximized(self) -> bool:
         return self._win_maximized
 
     @win_maximized.setter
@@ -340,7 +357,7 @@ class Configuration:
         self._win_maximized = val
 
     @property
-    def win_width(self):
+    def win_width(self) -> int:
         return self._win_width
 
     @win_width.setter
@@ -348,7 +365,7 @@ class Configuration:
         self._win_width = val
 
     @property
-    def win_height(self):
+    def win_height(self) -> int:
         return self._win_height
 
     @win_height.setter
@@ -748,7 +765,7 @@ class Job(GObject.GObject):
     def get_duration(self):
         """Launch ffprobe to get video duration. This method is the first step of the chain."""
         self._model[self._row][JOB_LIST_COLUMN_STATUS] = job_status_pixbuf[JobStatus.RUNNING]
-        self._model[self._row][JOB_LIST_START_TIME] = time.time()
+        self._model[self._row][JOB_LIST_START_TIME] = time.time_ns()
 
         self._ffprobe = FfprobeLauncher(self.file_name)
         self._ffprobe.connect('finished', self._increase_volume)
@@ -796,11 +813,9 @@ class Job(GObject.GObject):
         if progress_percent == 0:
             est_remaining = 0
         else:
-            spent_time = time.time() - self._model[self._row][JOB_LIST_START_TIME]
+            spent_time = time.time_ns() - self._model[self._row][JOB_LIST_START_TIME]
             est_remaining = spent_time * (100 - progress_percent) / progress_percent
-        m, s = divmod(int(est_remaining), 60)
-        h, m = divmod(m, 60)
-        est_remaining_str = f'{h:02d}:{m:02d}:{s:02d}'
+        est_remaining_str = format_time_ns(est_remaining)
 
         self._model[self._row][JOB_LIST_COLUMN_PROGRESS] = progress_percent
         self._model[self._row][JOB_LIST_COLUMN_ESTTIME] = est_remaining_str
@@ -809,12 +824,10 @@ class Job(GObject.GObject):
         self._ffmpeg = None
         self._model[self._row][JOB_LIST_COLUMN_STATUS] = job_status_pixbuf[JobStatus.FINISHED]
         self._model[self._row][JOB_LIST_COLUMN_PROGRESS] = 100
-        self._model[self._row][JOB_LIST_END_TIME] = time.time()
+        self._model[self._row][JOB_LIST_END_TIME] = time.time_ns()
 
         spent_time = self._model[self._row][JOB_LIST_END_TIME] - self._model[self._row][JOB_LIST_START_TIME]
-        m, s = divmod(int(spent_time), 60)
-        h, m = divmod(m, 60)
-        spent_time_str = f'{h:02d}:{m:02d}:{s:02d}'
+        spent_time_str = format_time_ns(spent_time)
         self._model[self._row][JOB_LIST_COLUMN_ESTTIME] = f'Total: {spent_time_str}'
 
         if self._keep_original:
@@ -856,7 +869,7 @@ class Job(GObject.GObject):
         self._ffmpeg = None
         self._model[self._row][JOB_LIST_COLUMN_STATUS] = job_status_pixbuf[JobStatus.FAILED]
         self._model[self._row][JOB_LIST_COLUMN_ESTTIME] = '--:--:--'
-        self._model[self._row][JOB_LIST_END_TIME] = time.time()
+        self._model[self._row][JOB_LIST_END_TIME] = time.time_ns()
         self._model[self._row][JOB_LIST_ERROR_STRING] = error
 
         if remove_temp_output and self._tempOutput is not None and os.path.exists(self._tempOutput):
@@ -1198,19 +1211,21 @@ class JobsListWidget(Gtk.ScrolledWindow):
         #  multiple rows are selected but the mouse is not over a selected row
         if (n_selected <= 1 or
                 (n_selected > 1 and not self._tv_selection.iter_is_selected(iter_))):
-            row = self._model[iter_]
-            file_name = os.path.basename(row[JOB_LIST_COLUMN_FILENAME])
-            audio_enc = row[JOB_LIST_AUDIO_ENC]
-            volume_inc = row[JOB_LIST_VOLUME_INC]
+            (file_name, audio_enc, volume_inc, keep_original, output_file,
+             status, start_time, end_time, error_string) = self._model.get(iter_,
+                                                                           JOB_LIST_COLUMN_FILENAME,
+                                                                           JOB_LIST_AUDIO_ENC, JOB_LIST_VOLUME_INC,
+                                                                           JOB_LIST_KEEP_ORIGINAL, JOB_LIST_OUTPUT_FILE,
+                                                                           JOB_LIST_COLUMN_STATUS, JOB_LIST_START_TIME,
+                                                                           JOB_LIST_END_TIME, JOB_LIST_ERROR_STRING)
+            file_name = os.path.basename(file_name)
 
-            keep_original = row[JOB_LIST_KEEP_ORIGINAL]
             if not keep_original:
                 output_file_name_str = ''
             else:
-                output_file_name = os.path.basename(row[JOB_LIST_OUTPUT_FILE])
-                output_file_name_str = f'Output file:\t\t{output_file_name}\n'
+                output_file_name = os.path.basename(output_file)
+                output_file_name_str = f'Output file:\t\t\t{output_file_name}\n'
 
-            status = row[JOB_LIST_COLUMN_STATUS]
             if status == job_status_pixbuf[JobStatus.QUEUED]:
                 status_str = "Queued"
             elif status == job_status_pixbuf[JobStatus.RUNNING]:
@@ -1222,35 +1237,33 @@ class JobsListWidget(Gtk.ScrolledWindow):
             else:
                 raise ValueError('Unexpected status')
 
-            start_time = row[JOB_LIST_START_TIME]
             start_time_str = ''
             end_time_str = ''
+            elapsed_time_str = ''
             if start_time != 0:
                 status_str += '\n'
-                start_time = time.localtime(row[JOB_LIST_START_TIME])
-                start_time_str = f'Start time:\t\t\t{start_time.tm_hour:02d}:'\
-                                 f'{start_time.tm_min:02d}:'\
-                                 f'{start_time.tm_sec:02d}'
+                temp = localtime_ns(start_time)
+                start_time_str = f'Start time:\t\t\t{format_localtime_ns(temp)}'
 
-                end_time = row[JOB_LIST_END_TIME]
                 if end_time != 0:
                     start_time_str += '\n'
-                    end_time = time.localtime(row[JOB_LIST_END_TIME])
-                    end_time_str = f'End time:\t\t\t{end_time.tm_hour:02d}:'\
-                                   f'{end_time.tm_min:02d}:'\
-                                   f'{end_time.tm_sec:02d}'
+                    temp = localtime_ns(end_time)
+                    end_time_str = f'End time:\t\t\t{format_localtime_ns(temp)}\n'
 
-            error_string = row[JOB_LIST_ERROR_STRING]
+                    elapsed_time = end_time - start_time
+                    elapsed_time_str = f'Elapsed time:\t\t{format_time_ns(elapsed_time)}'
+
             if error_string != '':
-                end_time_str += '\n'
-                error_string = f'Error:\n{error_string}'
+                elapsed_time_str += '\n'
+                error_string = f'\nError:\n{error_string}'
 
             tooltip.set_text(f'File:\t\t\t\t{file_name}\n'
                              f'Keep Original:\t\t{keep_original}\n'
                              f'{output_file_name_str}'
-                             f'Audio encoder:\t{audio_enc}\n'
+                             f'Audio encoder:\t\t{audio_enc}\n'
                              f'Volume increase:\t{volume_inc}\n'
-                             f'Status:\t\t\t\t{status_str}{start_time_str}{end_time_str}{error_string}')
+                             f'Status:\t\t\t\t{status_str}'
+                             f'{start_time_str}{end_time_str}{elapsed_time_str}{error_string}')
             return True
 
         else:
@@ -1279,7 +1292,7 @@ class JobsListWidget(Gtk.ScrolledWindow):
                 if status == job_status_pixbuf[JobStatus.RUNNING] and est_time_str != '':
                     total_running_jobs += 1
                     h, m, s = est_time_str.split(':')
-                    t = int(h) * 3600 + int(m) * 60 + int(s)
+                    t = int(h) * 3600 + int(m) * 60 + float(s)
                     if t > est_time:
                         est_time = t
 
@@ -1290,48 +1303,37 @@ class JobsListWidget(Gtk.ScrolledWindow):
                 start_time_str = '00:00:00'
                 end_time_str = '00:00:00'
                 elapsed_time_str = '00:00:00'
+                avg_elapsed_time_str = ''
                 accumulated_time_str = '00:00:00'
                 avg_time_str = '00:00:00'
                 est_end_time_queued_str = ''
             else:
-                m, s = divmod(int(end_time - start_time), 60)
-                h, m = divmod(m, 60)
-                elapsed_time_str = f'{h:02d}:{m:02d}:{s:02d}'
+                elapsed_time = end_time - start_time
+                start_time = localtime_ns(start_time)
+                end_time = localtime_ns(end_time)
+                avg_time = total_time // total_finished_jobs
+                avg_elapsed_time = elapsed_time // total_finished_jobs
 
-                start_time = time.localtime(start_time)
-                start_time_str = f'{start_time.tm_hour:02d}:'\
-                                 f'{start_time.tm_min:02d}:'\
-                                 f'{start_time.tm_sec:02d}'
-
-                end_time = time.localtime(end_time)
-                end_time_str = f'{end_time.tm_hour:02d}:'\
-                               f'{end_time.tm_min:02d}:'\
-                               f'{end_time.tm_sec:02d}'
-
-                m, s = divmod(int(total_time), 60)
-                h, m = divmod(m, 60)
-                accumulated_time_str = f'{h:02d}:{m:02d}:{s:02d}'
-
-                avg_time = total_time / total_finished_jobs
-                m, s = divmod(int(avg_time), 60)
-                h, m = divmod(m, 60)
-                avg_time_str = f'{h:02d}:{m:02d}:{s:02d}'
+                elapsed_time_str = format_time_ns(elapsed_time)
+                start_time_str = format_localtime_ns(start_time)
+                end_time_str = format_localtime_ns(end_time)
+                accumulated_time_str = format_time_ns(total_time)
+                avg_time_str = format_time_ns(avg_time)
+                avg_elapsed_time_str = f'Average elapsed time:\t\t{format_time_ns(avg_elapsed_time)}\n'
 
                 if total_queued_jobs == 0 and total_running_jobs == 0:
                     est_end_time_queued_str = ''
                 else:
-                    est_end_time_queued = (time.time() + est_time +
+                    est_end_time_queued = (time.time_ns() + est_time +
                                            (avg_time * math.ceil(total_queued_jobs / config.max_jobs)))
-                    est_end_time_queued = time.localtime(est_end_time_queued)
-                    est_end_time_queued_str = f'\n\nEstimated end time:\t\t'\
-                                              f'{est_end_time_queued.tm_hour:02d}:'\
-                                              f'{est_end_time_queued.tm_min:02d}:'\
-                                              f'{est_end_time_queued.tm_sec:02d}'
+                    est_end_time_queued = localtime_ns(est_end_time_queued)
+                    est_end_time_queued_str = f'\n\nEstimated end time:\t\t{format_localtime_ns(est_end_time_queued)}'
 
             tooltip.set_text(f'Statistics of {total_finished_jobs} completed jobs:\n'
                              f'Start time:\t\t\t\t\t{start_time_str}\n'
                              f'End time:\t\t\t\t\t{end_time_str}\n'
                              f'Elapsed time:\t\t\t\t{elapsed_time_str}\n'
+                             f'{avg_elapsed_time_str}'
                              f'Total accumulated time:\t{accumulated_time_str}\n'
                              f'Average completion time:\t{avg_time_str}'
                              f'{est_end_time_queued_str}')
@@ -1717,8 +1719,11 @@ class Preferences(Gtk.Window):
         self._temp_file_prefix_label = Gtk.Label(label='Temporal file prefix: ')
         self._temp_file_prefix_entry = Gtk.Entry(text=config.temp_file_prefix)
         self._grid.attach_next_to(self._temp_file_prefix_label, self._ignore_temp_files_label, Gtk.PositionType.BOTTOM, 1, 1)
-        self._grid.attach_next_to(self._temp_file_prefix_entry, self._temp_file_prefix_label, Gtk.PositionType.RIGHT, 1,
-                                  1)
+        self._grid.attach_next_to(self._temp_file_prefix_entry, self._temp_file_prefix_label, Gtk.PositionType.RIGHT, 1, 1)
+        self._show_milliseconds_label = Gtk.Label(label='Show milliseconds: ')
+        self._show_milliseconds_toggle = Gtk.CheckButton(active=config.show_milliseconds)
+        self._grid.attach_next_to(self._show_milliseconds_label, self._temp_file_prefix_label, Gtk.PositionType.BOTTOM, 1, 1)
+        self._grid.attach_next_to(self._show_milliseconds_toggle, self._show_milliseconds_label, Gtk.PositionType.RIGHT, 1, 1)
         # Avoid selection of _video_ext_entry text
         self._use_all_cpus_toggle.grab_focus()
 
@@ -1788,6 +1793,7 @@ class Preferences(Gtk.Window):
         config.output_suffix = self._output_suffix_entry.get_text()
         config.ignore_temp_files = self._ignore_temp_files_toggle.get_active()
         config.temp_file_prefix = self._temp_file_prefix_entry.get_text()
+        config.show_milliseconds = self._show_milliseconds_toggle.get_active()
         self.destroy()
 
 
@@ -1936,7 +1942,7 @@ class Application(Gtk.Application):
         Gtk.Application.do_startup(self)
 
         preferences_action = Gio.SimpleAction(name="preferences", parameter_type=None, enabled=True)
-        preferences_action.connect("activate", self._on_preferences)
+        preferences_action.connect("activate", lambda action, param: Preferences())
         self.add_action(preferences_action)
 
         about_action = Gio.SimpleAction(name="about", parameter_type=None, enabled=True)
@@ -1944,7 +1950,7 @@ class Application(Gtk.Application):
         self.add_action(about_action)
 
         quit_action = Gio.SimpleAction(name="quit", parameter_type=None, enabled=True)
-        quit_action.connect("activate", self._on_quit)
+        quit_action.connect("activate", lambda action, param: self.quit())
         self.add_action(quit_action)
 
     def do_activate(self):
@@ -1981,12 +1987,6 @@ class Application(Gtk.Application):
         about_dialog.connect('response', lambda w, res: w.destroy())
         about_dialog.present()
 
-    def _on_quit(self, _action, _param):
-        self.quit()
-
-    def _on_preferences(self, _action, _param):
-        Preferences()
-
 
 def error_message(text: str, secondary_text: str, modal: bool = False):
     dialog = Gtk.MessageDialog(
@@ -2002,6 +2002,31 @@ def error_message(text: str, secondary_text: str, modal: bool = False):
         dialog.run()
     else:
         dialog.show_all()
+
+
+def localtime_ns(ns_: int) -> struct_time_ns:
+    """time.localtime() with nanoseconds"""
+    s, ns = divmod(int(ns_), int(10e8))
+    st = time.localtime(s)
+    return struct_time_ns(st.tm_year, st.tm_mon, st.tm_mday, st.tm_hour, st.tm_min, st.tm_sec,
+                          st.tm_wday, st.tm_yday, st.tm_isdst, ns)
+
+
+def format_localtime_ns(st: struct_time_ns) -> str:
+    if config.show_milliseconds:
+        return f'{st.tm_hour:02d}:{st.tm_min:02d}:{st.tm_sec:02d}.{str(st.tm_ns)[0:3]}'
+    else:
+        return f'{st.tm_hour:02d}:{st.tm_min:02d}:{st.tm_sec:02d}'
+
+
+def format_time_ns(ns_: int) -> str:
+    s, ns = divmod(int(ns_), int(10e8))
+    m, s = divmod(s, 60)
+    h, m = divmod(m, 60)
+    if config.show_milliseconds:
+        return f'{h:02d}:{m:02d}:{s:02d}.{str(ns)[0:3]}'
+    else:
+        return f'{h:02d}:{m:02d}:{s:02d}'
 
 
 def check_prerequisites():
