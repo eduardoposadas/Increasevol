@@ -815,10 +815,9 @@ class Job(GObject.GObject):
         else:
             spent_time = time.time_ns() - self._model[self._row][JOB_LIST_START_TIME]
             est_remaining = spent_time * (100 - progress_percent) / progress_percent
-        est_remaining_str = format_time_ns(est_remaining)
 
         self._model[self._row][JOB_LIST_COLUMN_PROGRESS] = progress_percent
-        self._model[self._row][JOB_LIST_COLUMN_ESTTIME] = est_remaining_str
+        self._model[self._row][JOB_LIST_COLUMN_ESTTIME] = format_time_ns(est_remaining)
 
     def _conversion_finished(self, _object):
         self._ffmpeg = None
@@ -827,8 +826,7 @@ class Job(GObject.GObject):
         self._model[self._row][JOB_LIST_END_TIME] = time.time_ns()
 
         spent_time = self._model[self._row][JOB_LIST_END_TIME] - self._model[self._row][JOB_LIST_START_TIME]
-        spent_time_str = format_time_ns(spent_time)
-        self._model[self._row][JOB_LIST_COLUMN_ESTTIME] = f'Total: {spent_time_str}'
+        self._model[self._row][JOB_LIST_COLUMN_ESTTIME] = f'Total: {format_time_ns(spent_time)}'
 
         if self._keep_original:
             if os.path.exists(self._output_file_name):
@@ -1034,7 +1032,7 @@ class JobsListWidget(Gtk.ScrolledWindow):
                                     float,
                                     float,
                                     str,
-                                    int,
+                                    float,
                                     str,
                                     bool,
                                     str)
@@ -1211,13 +1209,14 @@ class JobsListWidget(Gtk.ScrolledWindow):
         #  multiple rows are selected but the mouse is not over a selected row
         if (n_selected <= 1 or
                 (n_selected > 1 and not self._tv_selection.iter_is_selected(iter_))):
-            (file_name, audio_enc, volume_inc, keep_original, output_file,
-             status, start_time, end_time, error_string) = self._model.get(iter_,
-                                                                           JOB_LIST_COLUMN_FILENAME,
-                                                                           JOB_LIST_AUDIO_ENC, JOB_LIST_VOLUME_INC,
-                                                                           JOB_LIST_KEEP_ORIGINAL, JOB_LIST_OUTPUT_FILE,
-                                                                           JOB_LIST_COLUMN_STATUS, JOB_LIST_START_TIME,
-                                                                           JOB_LIST_END_TIME, JOB_LIST_ERROR_STRING)
+            (file_name, audio_enc, volume_inc,
+             keep_original, output_file, status,
+             start_time, end_time, est_time,
+             error_string) = self._model.get(iter_,
+                                             JOB_LIST_COLUMN_FILENAME, JOB_LIST_AUDIO_ENC, JOB_LIST_VOLUME_INC,
+                                             JOB_LIST_KEEP_ORIGINAL, JOB_LIST_OUTPUT_FILE, JOB_LIST_COLUMN_STATUS,
+                                             JOB_LIST_START_TIME, JOB_LIST_END_TIME, JOB_LIST_COLUMN_ESTTIME,
+                                             JOB_LIST_ERROR_STRING)
             file_name = os.path.basename(file_name)
 
             if not keep_original:
@@ -1239,23 +1238,30 @@ class JobsListWidget(Gtk.ScrolledWindow):
 
             start_time_str = ''
             end_time_str = ''
+            estimated_end_time_str = ''
             elapsed_time_str = ''
             if start_time != 0:
                 status_str += '\n'
                 temp = localtime_ns(start_time)
-                start_time_str = f'Start time:\t\t\t{format_localtime_ns(temp)}'
+                start_time_str = f'Start time:\t\t\t{format_localtime_ns(temp)}\n'
 
                 if end_time != 0:
-                    start_time_str += '\n'
                     temp = localtime_ns(end_time)
                     end_time_str = f'End time:\t\t\t{format_localtime_ns(temp)}\n'
 
                     elapsed_time = end_time - start_time
                     elapsed_time_str = f'Elapsed time:\t\t{format_time_ns(elapsed_time)}'
+                elif est_time != '':  # and end_time == 0
+                    h, m, s = est_time.split(':')
+                    est_time_ns = time.time_ns() + int((int(h) * 3600 + int(m) * 60 + float(s)) * 10e8)
+                    estimated_end_time_str = f'Estimated end time:\t{format_localtime_ns(localtime_ns(est_time_ns))}'
 
             if error_string != '':
-                elapsed_time_str += '\n'
                 error_string = f'\nError:\n{error_string}'
+                if elapsed_time_str != '':
+                    elapsed_time_str += '\n'
+                if estimated_end_time_str != '':
+                    estimated_end_time_str += '\n'
 
             tooltip.set_text(f'File:\t\t\t\t{file_name}\n'
                              f'Keep Original:\t\t{keep_original}\n'
@@ -1263,7 +1269,7 @@ class JobsListWidget(Gtk.ScrolledWindow):
                              f'Audio encoder:\t\t{audio_enc}\n'
                              f'Volume increase:\t{volume_inc}\n'
                              f'Status:\t\t\t\t{status_str}'
-                             f'{start_time_str}{end_time_str}{elapsed_time_str}{error_string}')
+                             f'{start_time_str}{end_time_str}{estimated_end_time_str}{elapsed_time_str}{error_string}')
             return True
 
         else:
@@ -1621,7 +1627,7 @@ class Preferences(Gtk.Window):
         self._vol_increase_spin = Gtk.SpinButton(climb_rate=1.0,
                                                  digits=self._vol_increase_decimals,
                                                  adjustment=Gtk.Adjustment(value=float(config.volume_increase),
-                                                                           lower=1.0,
+                                                                           lower=0.1,
                                                                            upper=10.0,
                                                                            step_increment=0.1,
                                                                            page_increment=0.5,
