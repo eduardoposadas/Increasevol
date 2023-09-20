@@ -1298,7 +1298,7 @@ class JobsListWidget(Gtk.ScrolledWindow):
                 if status == job_status_pixbuf[JobStatus.RUNNING] and est_time_str != '':
                     total_running_jobs += 1
                     h, m, s = est_time_str.split(':')
-                    t = int(h) * 3600 + int(m) * 60 + float(s)
+                    t = int((int(h) * 3600 + int(m) * 60 + float(s)) * 10e8)
                     if t > est_time:
                         est_time = t
 
@@ -1340,7 +1340,7 @@ class JobsListWidget(Gtk.ScrolledWindow):
                              f'End time:\t\t\t\t\t{end_time_str}\n'
                              f'Elapsed time:\t\t\t\t{elapsed_time_str}\n'
                              f'{avg_elapsed_time_str}'
-                             f'Total accumulated time:\t{accumulated_time_str}\n'
+                             f'Total accumulated time:\t\t{accumulated_time_str}\n'
                              f'Average completion time:\t{avg_time_str}'
                              f'{est_end_time_queued_str}')
             return True
