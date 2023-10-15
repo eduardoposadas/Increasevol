@@ -20,6 +20,7 @@
 # along with this# program. If not, see <https://www.gnu.org/licenses/>.
 #############################################################################
 
+from typing import Any
 import os
 import sys
 import math
@@ -29,6 +30,7 @@ import shutil
 import signal
 import time
 from collections import namedtuple
+from collections.abc import Callable
 import tempfile
 import traceback
 import configparser
@@ -671,7 +673,8 @@ class JobStatus(Enum):
     RUNNING = 1,
     QUEUED = 2,
     FAILED = 3,
-    FINISHED = 4
+    FINISHED = 4,
+    TERMINATED = 5
 
 
 # Icon displayed in JobsListWidget for each job status. Assumes Adwaita theme:
@@ -680,7 +683,8 @@ job_status_pixbuf = {
     JobStatus.QUEUED: 'document-open-recent-symbolic',
     JobStatus.RUNNING: 'emblem-system-symbolic',
     JobStatus.FAILED: 'computer-fail-symbolic',
-    JobStatus.FINISHED: 'emblem-ok-symbolic'
+    JobStatus.FINISHED: 'emblem-ok-symbolic',
+    JobStatus.TERMINATED: 'window-close-symbolic'
 }
 
 # Column names for the Gtk.ListStore model in JobsListWidget
@@ -770,6 +774,7 @@ class Job(GObject.GObject):
         self._ffprobe = FfprobeLauncher(self.file_name)
         self._ffprobe.connect('finished', self._increase_volume)
         self._ffprobe.connect('finished_with_error', self._manage_error)
+        self._ffprobe.connect('terminated', self._manage_termination)
         GLib.idle_add(self._ffprobe.run)
 
     def _increase_volume(self, _object, duration: float):
@@ -807,6 +812,7 @@ class Job(GObject.GObject):
         self._ffmpeg.connect('update_state', self._update_conversion_state)
         self._ffmpeg.connect('finished', self._conversion_finished)
         self._ffmpeg.connect('finished_with_error', self._manage_error)
+        self._ffmpeg.connect('terminated', self._manage_termination)
         GLib.idle_add(self._ffmpeg.run)
 
     def _update_conversion_state(self, _object, progress_percent: float):
@@ -877,11 +883,20 @@ class Job(GObject.GObject):
                 pass
         self.emit('job_finished_with_error', self.file_name, error)
 
-    def kill(self):
+    def _manage_termination(self, _object):
+        self._ffprobe = None
+        self._ffmpeg = None
+        self._model[self._row][JOB_LIST_COLUMN_STATUS] = job_status_pixbuf[JobStatus.TERMINATED]
+        self._model[self._row][JOB_LIST_END_TIME] = time.time_ns()
+        spent_time = self._model[self._row][JOB_LIST_END_TIME] - self._model[self._row][JOB_LIST_START_TIME]
+        self._model[self._row][JOB_LIST_COLUMN_ESTTIME] = f'Term. at: {format_time_ns(spent_time)}'
+        self.emit('job_finished', self.file_name)
+
+    def terminate(self):
         if self._ffprobe is not None:
-            self._ffprobe.kill()
+            self._ffprobe.terminate()
         if self._ffmpeg is not None:
-            self._ffmpeg.kill()
+            self._ffmpeg.terminate()
 
 
 class JobsQueue(GObject.GObject):
@@ -919,14 +934,15 @@ class JobsQueue(GObject.GObject):
             else:
                 self._launch_job(path)
 
-    def remove_jobs(self, job_id_list: list):
+    def remove_jobs(self, _action: Gio.SimpleAction, _param: Any, job_id_list: list[int]):
         for row in self._model:
             id_ = row[JOB_LIST_ID]
             if id_ in job_id_list:
                 job_id_list.remove(id_)
                 status = row[JOB_LIST_COLUMN_STATUS]
                 if (status == job_status_pixbuf[JobStatus.FAILED] or
-                        status == job_status_pixbuf[JobStatus.FINISHED]):
+                        status == job_status_pixbuf[JobStatus.FINISHED] or
+                        status == job_status_pixbuf[JobStatus.TERMINATED]):
                     self._model.remove(row.iter)
                 elif status == job_status_pixbuf[JobStatus.QUEUED]:
                     # remove job from queue
@@ -939,13 +955,13 @@ class JobsQueue(GObject.GObject):
                 else:
                     raise ValueError('Unexpected status')
 
-    def force_launch_queued_jobs(self, job_id_list: list):
+    def force_launch_queued_jobs(self, _action: Gio.SimpleAction, _param: Any, job_id_list: list[int]):
         for job in [j for j in self._job_queue if j.id_ in job_id_list]:
             self._job_queue.remove(job)
             self._running_jobs.append(job)
             job.get_duration()
 
-    def launch_again_failed_jobs(self, job_id_list: list):
+    def launch_again_failed_jobs(self, _action: Gio.SimpleAction, _param: Any, job_id_list: list[int]):
         [self.add_job(i[JOB_LIST_COLUMN_FILENAME]) for i in self._model if i[JOB_LIST_ID] in job_id_list]
         # for i in self._model:
         #     if i[JOB_LIST_ID] in job_id_list:
@@ -954,10 +970,10 @@ class JobsQueue(GObject.GObject):
         #         if not job_id_list:
         #             return
 
-    def kill_jobs(self, job_id_list: list):
-        [job.kill() for job in self._running_jobs if job.id_ in job_id_list]
+    def terminate_jobs(self, _action: Gio.SimpleAction, _param: Any, job_id_list: list[int]):
+        [job.terminate() for job in self._running_jobs if job.id_ in job_id_list]
         # for job in [j for j in self._running_jobs if j.id_ in job_id_list]:
-        #     job.kill()
+        #     job.terminate()
 
     def check_queue(self):
         while len(self._job_queue) > 0 and len(self._running_jobs) < config.max_jobs:
@@ -1044,25 +1060,27 @@ class JobsListWidget(Gtk.ScrolledWindow):
         self._tv_selection = self._treeview.get_selection()
         self._tv_selection.set_mode(Gtk.SelectionMode.MULTIPLE)
 
-        self._remove_queued_action = Gio.SimpleAction(name="remove_queued", parameter_type=None, enabled=True)
-        self._remove_failed_action = Gio.SimpleAction(name="remove_failed", parameter_type=None, enabled=True)
-        self._remove_finished_action = Gio.SimpleAction(name="remove_finished", parameter_type=None, enabled=True)
-        self._launch_queued_action = Gio.SimpleAction(name="launch_queued", parameter_type=None, enabled=True)
-        self._launch_failed_action = Gio.SimpleAction(name="launch_failed", parameter_type=None, enabled=True)
-        self._stop_action = Gio.SimpleAction(name="stop", parameter_type=None, enabled=True)
-        self._remove_queued_action_handler = None
-        self._remove_failed_action_handler = None
-        self._remove_finished_action_handler = None
-        self._launch_queued_action_handler = None
-        self._launch_failed_action_handler = None
-        self._stop_action_handler = None
+        # Lists of jobs for popup menu when several jobs are selected
+        self._queued_jobs = []
+        self._running_jobs = []
+        self._failed_jobs = []
+        self._finished_jobs = []
+        self._terminated_jobs = []
+
+        self._actions: list[dict[str, Gio.SimpleAction|None, int|None, Callable, list[int]]] = [
+            {'name': 'remove_queued',     'action': None, 'handler': None, 'callback': jq.remove_jobs, 'list': self._queued_jobs},
+            {'name': 'remove_failed',     'action': None, 'handler': None, 'callback': jq.remove_jobs, 'list': self._failed_jobs},
+            {'name': 'remove_terminated', 'action': None, 'handler': None, 'callback': jq.remove_jobs, 'list': self._terminated_jobs},
+            {'name': 'remove_finished',   'action': None, 'handler': None, 'callback': jq.remove_jobs, 'list': self._finished_jobs},
+            {'name': 'launch_queued',     'action': None, 'handler': None, 'callback': jq.force_launch_queued_jobs, 'list': self._queued_jobs},
+            {'name': 'launch_failed',     'action': None, 'handler': None, 'callback': jq.launch_again_failed_jobs, 'list': self._failed_jobs},
+            {'name': 'launch_terminated', 'action': None, 'handler': None, 'callback': jq.launch_again_failed_jobs, 'list': self._terminated_jobs},
+            {'name': 'terminate',         'action': None, 'handler': None, 'callback': jq.terminate_jobs, 'list': self._running_jobs},
+        ]
         self._action_group = Gio.SimpleActionGroup()
-        self._action_group.add_action(self._remove_queued_action)
-        self._action_group.add_action(self._remove_failed_action)
-        self._action_group.add_action(self._remove_finished_action)
-        self._action_group.add_action(self._launch_queued_action)
-        self._action_group.add_action(self._launch_failed_action)
-        self._action_group.add_action(self._stop_action)
+        for a in self._actions:
+            a['action'] = Gio.SimpleAction(name=a['name'], parameter_type=None, enabled=True)
+            self._action_group.add_action(a['action'])
         self._treeview.insert_action_group('app', self._action_group)
 
         self._treeview.connect('button-press-event', self._on_button_press)
@@ -1100,94 +1118,76 @@ class JobsListWidget(Gtk.ScrolledWindow):
                                                      JOB_LIST_COLUMN_STATUS)
             file_name = os.path.basename(file_name)
             file_name = file_name.replace('_', '__')  # Avoid use _ as menu accelerator mark
+
             if status == job_status_pixbuf[JobStatus.QUEUED]:
                 popover_menu.append(f'Remove from queue {file_name}', 'app.remove_queued')
                 popover_menu.append(f'Launch now {file_name}', 'app.launch_queued')
-            elif status == job_status_pixbuf[JobStatus.FAILED]:
+            elif (status == job_status_pixbuf[JobStatus.FAILED] or
+                  status == job_status_pixbuf[JobStatus.TERMINATED]):
                 popover_menu.append(f'Remove from list {file_name}', 'app.remove_queued')  # jq.remove_jobs works
                 popover_menu.append(f'Launch again {file_name}', 'app.launch_failed')
             elif status == job_status_pixbuf[JobStatus.FINISHED]:
                 popover_menu.append(f'Remove from list {file_name}', 'app.remove_queued')
             elif status == job_status_pixbuf[JobStatus.RUNNING]:
-                popover_menu.append(f'Stop processing {file_name}', 'app.stop')
+                popover_menu.append(f'Terminate processing {file_name}', 'app.terminate')
             else:
                 raise ValueError('Unexpected status')
-            if self._remove_queued_action_handler is not None:
-                self._remove_queued_action.disconnect(self._remove_queued_action_handler)
-            self._remove_queued_action_handler = self._remove_queued_action.connect("activate",
-                                                                                    lambda a, p: jq.remove_jobs([id_]))
-            if self._launch_queued_action_handler is not None:
-                self._launch_queued_action.disconnect(self._launch_queued_action_handler)
-            self._launch_queued_action_handler = self._launch_queued_action.connect("activate",
-                                                                                    lambda a, p: jq.force_launch_queued_jobs([id_]))
-            if self._launch_failed_action_handler is not None:
-                self._launch_failed_action.disconnect(self._launch_failed_action_handler)
-            self._launch_failed_action_handler = self._launch_failed_action.connect("activate",
-                                                                                    lambda a, p: jq.launch_again_failed_jobs([id_]))
-            if self._stop_action_handler is not None:
-                self._stop_action.disconnect(self._stop_action_handler)
-            self._stop_action_handler = self._stop_action.connect("activate", lambda a, p: jq.kill_jobs([id_]))
-        else:
-            # Several rows are selected and the mouse is over a selected row.
-            queued_jobs = []
-            running_jobs = []
-            failed_jobs = []
-            finished_jobs = []
+
+            for a in self._actions:
+                if a['handler'] is not None:
+                    a['action'].disconnect(a['handler'])
+                a['handler'] = a['action'].connect("activate", a['callback'], [id_])
+
+        else:  # Several rows are selected and the mouse is over a selected row.
+            self._queued_jobs.clear()
+            self._running_jobs.clear()
+            self._failed_jobs.clear()
+            self._finished_jobs.clear()
+            self._terminated_jobs.clear()
+
             for row_path in self._tv_selection.get_selected_rows()[1]:
                 id_, status = self._model.get(self._model.get_iter(row_path), JOB_LIST_ID, JOB_LIST_COLUMN_STATUS)
                 if status == job_status_pixbuf[JobStatus.QUEUED]:
-                    queued_jobs.append(id_)
+                    self._queued_jobs.append(id_)
                 elif status == job_status_pixbuf[JobStatus.RUNNING]:
-                    running_jobs.append(id_)
+                    self._running_jobs.append(id_)
                 elif status == job_status_pixbuf[JobStatus.FAILED]:
-                    failed_jobs.append(id_)
+                    self._failed_jobs.append(id_)
                 elif status == job_status_pixbuf[JobStatus.FINISHED]:
-                    finished_jobs.append(id_)
+                    self._finished_jobs.append(id_)
+                elif status == job_status_pixbuf[JobStatus.TERMINATED]:
+                    self._terminated_jobs.append(id_)
                 else:
                     raise ValueError('Unexpected status')
 
-            if len(queued_jobs) > 0:
+            if len(self._queued_jobs) > 0:
                 section = Gio.Menu()
                 section.append('Remove queued jobs from queue', 'app.remove_queued')
                 section.append('Launch queued jobs now', 'app.launch_queued')
                 popover_menu.append_section(label='Queued jobs', section=section)
-            if len(failed_jobs) > 0:
+            if len(self._failed_jobs) > 0:
                 section = Gio.Menu()
                 section.append('Remove failed jobs from list', 'app.remove_failed')
                 section.append('Launch failed jobs again', 'app.launch_failed')
                 popover_menu.append_section(label='Failed jobs', section=section)
-            if len(finished_jobs) > 0:
+            if len(self._terminated_jobs) > 0:
+                section = Gio.Menu()
+                section.append('Remove terminated jobs from list', 'app.remove_terminated')
+                section.append('Launch terminated jobs again', 'app.launch_terminated')
+                popover_menu.append_section(label='Terminated jobs', section=section)
+            if len(self._finished_jobs) > 0:
                 section = Gio.Menu()
                 section.append('Remove finished jobs from list', 'app.remove_finished')
                 popover_menu.append_section(label='Finished jobs', section=section)
-            if len(running_jobs) > 0:
+            if len(self._running_jobs) > 0:
                 section = Gio.Menu()
-                section.append('Stop processing running jobs', 'app.stop')
+                section.append('Terminate processing running jobs', 'app.terminate')
                 popover_menu.append_section(label='Running jobs', section=section)
 
-            if self._remove_queued_action_handler is not None:
-                self._remove_queued_action.disconnect(self._remove_queued_action_handler)
-            self._remove_queued_action_handler = self._remove_queued_action.connect("activate",
-                                                                                    lambda a, p: jq.remove_jobs(queued_jobs))
-            if self._remove_failed_action_handler is not None:
-                self._remove_failed_action.disconnect(self._remove_failed_action_handler)
-            self._remove_failed_action_handler = self._remove_failed_action.connect("activate",
-                                                                                    lambda a, p: jq.remove_jobs(failed_jobs))
-            if self._remove_finished_action_handler is not None:
-                self._remove_finished_action.disconnect(self._remove_finished_action_handler)
-            self._remove_finished_action_handler = self._remove_finished_action.connect("activate",
-                                                                                        lambda a, p: jq.remove_jobs(finished_jobs))
-            if self._launch_queued_action_handler is not None:
-                self._launch_queued_action.disconnect(self._launch_queued_action_handler)
-            self._launch_queued_action_handler = self._launch_queued_action.connect("activate",
-                                                                                    lambda a, p: jq.force_launch_queued_jobs(queued_jobs))
-            if self._launch_failed_action_handler is not None:
-                self._launch_failed_action.disconnect(self._launch_failed_action_handler)
-            self._launch_failed_action_handler = self._launch_failed_action.connect("activate",
-                                                                                    lambda a, p: jq.launch_again_failed_jobs(failed_jobs))
-            if self._stop_action_handler is not None:
-                self._stop_action.disconnect(self._stop_action_handler)
-            self._stop_action_handler = self._stop_action.connect("activate", lambda a, p: jq.kill_jobs(running_jobs))
+            for a in self._actions:
+                if a['handler'] is not None:
+                    a['action'].disconnect(a['handler'])
+                a['handler'] = a['action'].connect("activate", a['callback'], a['list'])
 
         popover = Gtk.Popover.new_from_model(relative_to=self._treeview, model=popover_menu)
         popover.set_position(Gtk.PositionType.BOTTOM)
@@ -1233,6 +1233,8 @@ class JobsListWidget(Gtk.ScrolledWindow):
                 status_str = "Failed"
             elif status == job_status_pixbuf[JobStatus.FINISHED]:
                 status_str = "Finished"
+            elif status == job_status_pixbuf[JobStatus.TERMINATED]:
+                status_str = "Terminated"
             else:
                 raise ValueError('Unexpected status')
 
@@ -1412,31 +1414,36 @@ class ProcessLauncher(GObject.GObject):
     This class is not used. Instead, the child classes FfprobeLauncher and
     FfmpegLauncher are used.
     To use the ProcessLauncher class it is necessary to create a derived class
-    and override at least the methods __init__, for_each_line, at_finalization
-    and at_finalization_with_error.
+    and:
+        - In the __init__ method of the derived class set self._cmd before
+          calling super.__init__(), for example:
+            self._cmd = '/bin/ls'
+            super.__init__()
+        - override at least the methods for_each_line, at_finalization,
+    at_finalization_with_error and at_termination.
 
-    The super().__init__(command) call in the derived class must include the
-    command executed, like super().__init__('/bin/ls').
     The for_each_line method is called for each line of the command output. The
     end of the line character set is specified in the read_upto_async call of
     the _queue_read method. In the current implementation the end of line
-    character list is '\r\n' which is the correct one for ffmpeg output on Linux
-    For a common Linux command the '\n' character should be sufficient.
+    character list is '\r\n' which is the correct one for ffmpeg output on
+    Linux. For a common Linux command the '\n' character should be sufficient.
 
     The at_finalization and at_finalization_with_error methods are called when
-    the command is over without error and with error respectively
+    the command terminates without error and with error respectively.
+
+    The at_termination method is called when the process is terminated with the
+    terminate() method.
     """
-    def __init__(self, cmd: str = None):
+    def __init__(self):
         super().__init__()
 
-        if cmd is None:
+        if not self._cmd:
             raise NotImplementedError()
-        else:
-            self._cmd = cmd
 
         self._process = None
         self._data_stream = None
         self._cancellable = None
+        self._term_signaled = False
 
     def run(self):
         self._cancellable = Gio.Cancellable()
@@ -1454,7 +1461,7 @@ class ProcessLauncher(GObject.GObject):
             self._queue_read()
         except GLib.GError as e:
             traceback.print_exc()
-            self.at_finalization_with_error(f'{str(e)}\n\nCommand:\n{self._cmd}')
+            self.at_finalization_with_error(f'{e.message}\n\nCommand:\n{self._cmd}')
             return
 
     def _queue_read(self):
@@ -1474,12 +1481,19 @@ class ProcessLauncher(GObject.GObject):
         # print('Process finished')
         try:
             proc.wait_check_finish(results)
-        except Exception as e:
-            traceback.print_exc()
-            self.at_finalization_with_error(f'{str(e)}\n\nCommand:\n{self._cmd}')
+        except GLib.GError as e:
+            self._cancel_read()
+            if (self._term_signaled and proc.get_if_exited() and not proc.get_successful() and
+                    e.domain == 'g-spawn-exit-error-quark' and e.code == 255):  # FIXME: This is not portable.
+                self.at_termination()
+            else:
+                traceback.print_exc()
+                self.at_finalization_with_error(f'{e.message}\n\nCommand:\n{self._cmd}')
         else:
+            self._cancel_read()
             self.at_finalization()
-        self._cancel_read()
+        finally:
+            self._cancel_read()
 
     def _on_data(self, source, result):
         # FIXME: sometimes this method is executed even when the task is cancelled
@@ -1494,20 +1508,20 @@ class ProcessLauncher(GObject.GObject):
                 self.for_each_line(line)
         except GLib.GError as e:
             traceback.print_exc()
-            self.at_finalization_with_error(f'{str(e)}\n\nCommand:\n{self._cmd}')
+            self.at_finalization_with_error(f'{e.message}\n\nCommand:\n{self._cmd}')
             return
 
         # read_upto_finish() returns None on error without raise any exception
         if line is not None:
             self._queue_read()
 
-    def stop(self):
-        # print('Stop')
+    def terminate(self):
+        # print('Terminated')
+        self._term_signaled = True
         self._process.send_signal(signal.SIGTERM)
 
     def kill(self):
         # print('Kill')
-        self._cancel_read()
         self._process.send_signal(signal.SIGKILL)
 
     def for_each_line(self, line: str):
@@ -1517,6 +1531,9 @@ class ProcessLauncher(GObject.GObject):
         raise NotImplementedError()
 
     def at_finalization_with_error(self, error: str):
+        raise NotImplementedError()
+
+    def at_termination(self):
         raise NotImplementedError()
 
 
@@ -1529,12 +1546,16 @@ class FfprobeLauncher(ProcessLauncher):
     def finished_with_error(self, error, remove_temp_output):
         pass
 
+    @GObject.Signal()
+    def terminated(self):
+        pass
+
     def __init__(self, file_name: str):
         self._error = False
         self._duration = 0
         self._n_lines = 0
         self._cmd = config.ffprobe_get_duration_cmd.format(video_file_name=file_name)
-        super().__init__(self._cmd)
+        super().__init__()
 
     def for_each_line(self, line: str):
         if self._n_lines > 0:
@@ -1556,6 +1577,9 @@ class FfprobeLauncher(ProcessLauncher):
             self._error = True
             self.emit('finished_with_error', error, True)
 
+    def at_termination(self):
+        self.emit('terminated')
+
 
 class FfmpegLauncher(ProcessLauncher):
     @GObject.Signal(arg_types=[float, ])
@@ -1570,6 +1594,10 @@ class FfmpegLauncher(ProcessLauncher):
     def finished_with_error(self, error, remove_temp_output):
         pass
 
+    @GObject.Signal()
+    def terminated(self):
+        pass
+
     def __init__(self, file_name: str, temp_output: str, volume_increase: float, audio_encoder: str,
                  audio_quality: float, remove_subtitles: bool, duration: float):
         self._error = False
@@ -1580,7 +1608,7 @@ class FfmpegLauncher(ProcessLauncher):
                                                             audio_encoder=audio_encoder,
                                                             audio_quality=audio_quality,
                                                             remove_subtitles_param='-sn' if remove_subtitles else '')
-        super().__init__(self._cmd)
+        super().__init__()
 
     def for_each_line(self, line: str):
         if line.startswith('frame='):
@@ -1601,11 +1629,14 @@ class FfmpegLauncher(ProcessLauncher):
             self._error = True
             self.emit('finished_with_error', error, True)
 
+    def at_termination(self):
+        self.emit('terminated')
+
 
 class Preferences(Gtk.Window):
     """Preferences window."""
 
-    def __init__(self):
+    def __init__(self, _action, _param):
         super().__init__()
         self._vol_increase_decimals = 1
         self._separator_margin = 5
@@ -1812,7 +1843,6 @@ MENU_XML = """
       <item>
         <attribute name="action">app.preferences</attribute>
         <attribute name="label" translatable="yes">_Preferences</attribute>
-        <attribute name="accel">&lt;Primary&gt;p</attribute>
     </item>
     </section>
     <section>
@@ -1837,7 +1867,6 @@ MENU_XML = """
       <item>
         <attribute name="action">app.quit</attribute>
         <attribute name="label" translatable="yes">_Quit</attribute>
-        <attribute name="accel">&lt;Primary&gt;q</attribute>
     </item>
     </section>
   </menu>
@@ -1860,24 +1889,16 @@ class AppWindow(Gtk.ApplicationWindow):
         self.connect('size-allocate', self._on_size_allocate_change)
         self.connect('window-state-event', self._on_state_event)
 
-        # Menu actions
-        file_exp_hidden_files_action = Gio.SimpleAction.new_stateful(
-            "file_expl_show_hidden_files", None, GLib.Variant.new_boolean(config.file_expl_show_hidden_files)
+        # Main menu stateful actions
+        actions = (
+            ("file_expl_show_hidden_files", self._on_hidden_files_toggle, config.file_expl_show_hidden_files),
+            ("file_expl_case_sensitive_sort", self._on_case_sort_toggle, config.file_expl_case_sensitive_sort),
+            ("file_expl_single_click", self._on_single_click_toggle, config.file_expl_activate_on_single_click)
         )
-        file_exp_hidden_files_action.connect("change-state", self._on_hidden_files_toggle)
-        self.add_action(file_exp_hidden_files_action)
-
-        file_exp_case_sort_action = Gio.SimpleAction.new_stateful(
-            "file_expl_case_sensitive_sort", None, GLib.Variant.new_boolean(config.file_expl_case_sensitive_sort)
-        )
-        file_exp_case_sort_action.connect("change-state", self._on_case_sort_toggle)
-        self.add_action(file_exp_case_sort_action)
-
-        file_exp_single_click_action = Gio.SimpleAction.new_stateful(
-            "file_expl_single_click", None, GLib.Variant.new_boolean(config.file_expl_activate_on_single_click)
-        )
-        file_exp_single_click_action.connect("change-state", self._on_single_click_toggle)
-        self.add_action(file_exp_single_click_action)
+        for (name, callback, value) in actions:
+            action = Gio.SimpleAction.new_stateful(name, None, GLib.Variant.new_boolean(value))
+            action.connect("change-state", callback)
+            self.add_action(action)
 
         # Build main window
         menubutton = Gtk.MenuButton(direction=Gtk.ArrowType.NONE)
@@ -1947,17 +1968,16 @@ class Application(Gtk.Application):
     def do_startup(self):
         Gtk.Application.do_startup(self)
 
-        preferences_action = Gio.SimpleAction(name="preferences", parameter_type=None, enabled=True)
-        preferences_action.connect("activate", lambda action, param: Preferences())
-        self.add_action(preferences_action)
-
-        about_action = Gio.SimpleAction(name="about", parameter_type=None, enabled=True)
-        about_action.connect("activate", self._on_about)
-        self.add_action(about_action)
-
-        quit_action = Gio.SimpleAction(name="quit", parameter_type=None, enabled=True)
-        quit_action.connect("activate", lambda action, param: self.quit())
-        self.add_action(quit_action)
+        actions = (
+            ("preferences", Preferences, ["<Control>p"]),
+            ("about", self._on_about, ["<Control>a"]),
+            ("quit", lambda _action, _param: self.quit(), ["<Control>q"])
+        )
+        for (name, callback, accels) in actions:
+            action = Gio.SimpleAction(name=name, parameter_type=None, enabled=True)
+            action.connect('activate', callback)
+            self.add_action(action)
+            self.set_accels_for_action("app." + name, accels)
 
     def do_activate(self):
         if not self.window:
