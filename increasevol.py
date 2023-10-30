@@ -1067,20 +1067,21 @@ class JobsListWidget(Gtk.ScrolledWindow):
         self._finished_jobs = []
         self._terminated_jobs = []
 
-        self._actions: list[dict[str, Gio.SimpleAction|None, int|None, Callable, list[int]]] = [
-            {'name': 'remove_queued',     'action': None, 'handler': None, 'callback': jq.remove_jobs, 'list': self._queued_jobs},
-            {'name': 'remove_failed',     'action': None, 'handler': None, 'callback': jq.remove_jobs, 'list': self._failed_jobs},
-            {'name': 'remove_terminated', 'action': None, 'handler': None, 'callback': jq.remove_jobs, 'list': self._terminated_jobs},
-            {'name': 'remove_finished',   'action': None, 'handler': None, 'callback': jq.remove_jobs, 'list': self._finished_jobs},
-            {'name': 'launch_queued',     'action': None, 'handler': None, 'callback': jq.force_launch_queued_jobs, 'list': self._queued_jobs},
-            {'name': 'launch_failed',     'action': None, 'handler': None, 'callback': jq.launch_again_failed_jobs, 'list': self._failed_jobs},
-            {'name': 'launch_terminated', 'action': None, 'handler': None, 'callback': jq.launch_again_failed_jobs, 'list': self._terminated_jobs},
-            {'name': 'terminate',         'action': None, 'handler': None, 'callback': jq.terminate_jobs, 'list': self._running_jobs},
-        ]
+        actions = (
+            ('remove_queued',     jq.remove_jobs,              self._queued_jobs),
+            ('remove_failed',     jq.remove_jobs,              self._failed_jobs),
+            ('remove_terminated', jq.remove_jobs,              self._terminated_jobs),
+            ('remove_finished',   jq.remove_jobs,              self._finished_jobs),
+            ('launch_queued',     jq.force_launch_queued_jobs, self._queued_jobs),
+            ('launch_failed',     jq.launch_again_failed_jobs, self._failed_jobs),
+            ('launch_terminated', jq.launch_again_failed_jobs, self._terminated_jobs),
+            ('terminate',         jq.terminate_jobs,           self._running_jobs),
+        )
         self._action_group = Gio.SimpleActionGroup()
-        for a in self._actions:
-            a['action'] = Gio.SimpleAction(name=a['name'], parameter_type=None, enabled=True)
-            self._action_group.add_action(a['action'])
+        for (name, callback, list_) in actions:
+            sa = Gio.SimpleAction(name=name, parameter_type=None, enabled=True)
+            sa.connect("activate", callback, list_)
+            self._action_group.add_action(sa)
         self._treeview.insert_action_group('app', self._action_group)
 
         self._treeview.connect('button-press-event', self._on_button_press)
@@ -1108,6 +1109,12 @@ class JobsListWidget(Gtk.ScrolledWindow):
         n_selected = self._tv_selection.count_selected_rows()
         popover_menu = Gio.Menu()
 
+        self._queued_jobs.clear()
+        self._running_jobs.clear()
+        self._failed_jobs.clear()
+        self._finished_jobs.clear()
+        self._terminated_jobs.clear()
+
         #  If one or no rows are selected or
         #  multiple rows are selected but the mouse is not over a selected row
         if (n_selected <= 1 or
@@ -1116,6 +1123,12 @@ class JobsListWidget(Gtk.ScrolledWindow):
                                                      JOB_LIST_ID,
                                                      JOB_LIST_COLUMN_FILENAME,
                                                      JOB_LIST_COLUMN_STATUS)
+            self._queued_jobs.append(id_)
+            self._running_jobs.append(id_)
+            self._failed_jobs.append(id_)
+            self._finished_jobs.append(id_)
+            self._terminated_jobs.append(id_)
+
             file_name = os.path.basename(file_name)
             file_name = file_name.replace('_', '__')  # Avoid use _ as menu accelerator mark
 
@@ -1133,18 +1146,7 @@ class JobsListWidget(Gtk.ScrolledWindow):
             else:
                 raise ValueError('Unexpected status')
 
-            for a in self._actions:
-                if a['handler'] is not None:
-                    a['action'].disconnect(a['handler'])
-                a['handler'] = a['action'].connect("activate", a['callback'], [id_])
-
         else:  # Several rows are selected and the mouse is over a selected row.
-            self._queued_jobs.clear()
-            self._running_jobs.clear()
-            self._failed_jobs.clear()
-            self._finished_jobs.clear()
-            self._terminated_jobs.clear()
-
             for row_path in self._tv_selection.get_selected_rows()[1]:
                 id_, status = self._model.get(self._model.get_iter(row_path), JOB_LIST_ID, JOB_LIST_COLUMN_STATUS)
                 if status == job_status_pixbuf[JobStatus.QUEUED]:
@@ -1183,11 +1185,6 @@ class JobsListWidget(Gtk.ScrolledWindow):
                 section = Gio.Menu()
                 section.append('Terminate processing running jobs', 'app.terminate')
                 popover_menu.append_section(label='Running jobs', section=section)
-
-            for a in self._actions:
-                if a['handler'] is not None:
-                    a['action'].disconnect(a['handler'])
-                a['handler'] = a['action'].connect("activate", a['callback'], a['list'])
 
         popover = Gtk.Popover.new_from_model(relative_to=self._treeview, model=popover_menu)
         popover.set_position(Gtk.PositionType.BOTTOM)
@@ -1274,8 +1271,7 @@ class JobsListWidget(Gtk.ScrolledWindow):
                              f'{start_time_str}{end_time_str}{estimated_end_time_str}{elapsed_time_str}{error_string}')
             return True
 
-        else:
-            # Several rows are selected and the mouse is over a selected row.
+        else:  # Several rows are selected and the mouse is over a selected row.
             total_queued_jobs = 0
             total_finished_jobs = 0
             total_running_jobs = 0
@@ -1636,7 +1632,7 @@ class FfmpegLauncher(ProcessLauncher):
 class Preferences(Gtk.Window):
     """Preferences window."""
 
-    def __init__(self, _action, _param):
+    def __init__(self, _action: Gio.SimpleAction, _param: Any):
         super().__init__()
         self._vol_increase_decimals = 1
         self._separator_margin = 5
