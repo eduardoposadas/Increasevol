@@ -30,7 +30,6 @@ import shutil
 import signal
 import time
 from collections import namedtuple
-from collections.abc import Callable
 import tempfile
 import traceback
 import configparser
@@ -485,7 +484,7 @@ class FileExplorer(Gtk.VBox):
     def set_single_click(self, val: bool):
         self._icon_view.set_activate_on_single_click(val)
 
-    def open_location_from_place_sidebar(self, _places_sidebar, location, _open_flags):
+    def open_location_from_places_sidebar(self, _places_sidebar, location, _open_flags):
         if location.get_path() is None:
             return
 
@@ -897,6 +896,10 @@ class Job(GObject.GObject):
             self._ffprobe.terminate()
         if self._ffmpeg is not None:
             self._ffmpeg.terminate()
+        try:
+            os.remove(self._tempOutput)
+        except OSError:
+            pass
 
 
 class JobsQueue(GObject.GObject):
@@ -919,6 +922,10 @@ class JobsQueue(GObject.GObject):
 
     def set_model(self, model: Gtk.ListStore):
         self._model = model
+
+    @property
+    def n_running_jobs(self):
+        return len(self._running_jobs)
 
     def add_job(self, path: str):
         if self._model is None:
@@ -974,6 +981,11 @@ class JobsQueue(GObject.GObject):
         [job.terminate() for job in self._running_jobs if job.id_ in job_id_list]
         # for job in [j for j in self._running_jobs if j.id_ in job_id_list]:
         #     job.terminate()
+
+    def terminate_all_jobs(self):
+        self._job_queue.clear()
+        for job in self._running_jobs:
+            job.terminate()
 
     def check_queue(self):
         while len(self._job_queue) > 0 and len(self._running_jobs) < config.max_jobs:
@@ -1252,7 +1264,7 @@ class JobsListWidget(Gtk.ScrolledWindow):
                     elapsed_time_str = f'Elapsed time:\t\t{format_time_ns(elapsed_time)}'
                 elif est_time != '':  # and end_time == 0
                     h, m, s = est_time.split(':')
-                    est_time_ns = time.time_ns() + int((int(h) * 3600 + int(m) * 60 + float(s)) * 10e8)
+                    est_time_ns = time.time_ns() + int((int(h) * 3600 + int(m) * 60 + float(s)) * 1e9)
                     estimated_end_time_str = f'Estimated end time:\t{format_localtime_ns(localtime_ns(est_time_ns))}'
 
             if error_string != '':
@@ -1296,7 +1308,7 @@ class JobsListWidget(Gtk.ScrolledWindow):
                 if status == job_status_pixbuf[JobStatus.RUNNING] and est_time_str != '':
                     total_running_jobs += 1
                     h, m, s = est_time_str.split(':')
-                    t = int((int(h) * 3600 + int(m) * 60 + float(s)) * 10e8)
+                    t = int((int(h) * 3600 + int(m) * 60 + float(s)) * 1e9)
                     if t > est_time:
                         est_time = t
 
@@ -1779,7 +1791,6 @@ class Preferences(Gtk.Window):
 
         self.add(self._grid)
         self.show_all()
-        self.connect('destroy', self._on_destroy)
 
     def _on_audio_quality_change_value(self, _scale, scroll_type, value):
         """
@@ -1810,7 +1821,7 @@ class Preferences(Gtk.Window):
             self._output_prefix_entry.set_sensitive(False)
             self._output_suffix_entry.set_sensitive(False)
 
-    def _on_destroy(self, _w):
+    def do_delete_event(self, _event):
         if config.max_jobs != int(self._max_jobs_spin.get_value()):
             config.max_jobs = int(self._max_jobs_spin.get_value())
             jq.check_queue()
@@ -1827,7 +1838,6 @@ class Preferences(Gtk.Window):
         config.ignore_temp_files = self._ignore_temp_files_toggle.get_active()
         config.temp_file_prefix = self._temp_file_prefix_entry.get_text()
         config.show_milliseconds = self._show_milliseconds_toggle.get_active()
-        self.destroy()
 
 
 # This XML is here to avoid another file. This is a "one file application" with no installation instructions.
@@ -1837,7 +1847,7 @@ MENU_XML = """
   <menu id="app-menu">
     <section>
       <item>
-        <attribute name="action">app.preferences</attribute>
+        <attribute name="action">win.preferences</attribute>
         <attribute name="label" translatable="yes">_Preferences</attribute>
     </item>
     </section>
@@ -1857,11 +1867,11 @@ MENU_XML = """
     </section>
     <section>
       <item>
-        <attribute name="action">app.about</attribute>
+        <attribute name="action">win.about</attribute>
         <attribute name="label" translatable="yes">_About</attribute>
       </item>
       <item>
-        <attribute name="action">app.quit</attribute>
+        <attribute name="action">win.quit</attribute>
         <attribute name="label" translatable="yes">_Quit</attribute>
     </item>
     </section>
@@ -1885,6 +1895,17 @@ class AppWindow(Gtk.ApplicationWindow):
         self.connect('size-allocate', self._on_size_allocate_change)
         self.connect('window-state-event', self._on_state_event)
 
+        # Main menu simple actions
+        actions = (
+            ("preferences", Preferences),
+            ("about", self._on_about),
+            ("quit", lambda _action, _param: self.close())
+        )
+        for (name, callback) in actions:
+            action = Gio.SimpleAction(name=name, parameter_type=None, enabled=True)
+            action.connect('activate', callback)
+            self.add_action(action)
+
         # Main menu stateful actions
         actions = (
             ("file_expl_show_hidden_files", self._on_hidden_files_toggle, config.file_expl_show_hidden_files),
@@ -1897,20 +1918,20 @@ class AppWindow(Gtk.ApplicationWindow):
             self.add_action(action)
 
         # Build main window
-        menubutton = Gtk.MenuButton(direction=Gtk.ArrowType.NONE)
+        menu_button = Gtk.MenuButton(direction=Gtk.ArrowType.NONE)
         builder = Gtk.Builder.new_from_string(MENU_XML, -1)
-        menubutton.set_menu_model(builder.get_object("app-menu"))
+        menu_button.set_menu_model(builder.get_object("app-menu"))
 
-        headerbar = Gtk.HeaderBar(title='Increase video audio volume with ffmpeg')
-        headerbar.set_show_close_button(True)
-        headerbar.pack_start(menubutton)
-        self.set_titlebar(headerbar)
+        header_bar = Gtk.HeaderBar(title='Increase video audio volume with ffmpeg')
+        header_bar.set_show_close_button(True)
+        header_bar.pack_start(menu_button)
+        self.set_titlebar(header_bar)
 
         self._places = Gtk.PlacesSidebar()
         self.file_exp = FileExplorer()
         self._jobsListWidget = JobsListWidget()
 
-        self._places.connect('open-location', self.file_exp.open_location_from_place_sidebar)
+        self._places.connect('open-location', self.file_exp.open_location_from_places_sidebar)
         self.file_exp.connect('video_selected', self._jobsListWidget.add_job_from_path)
         jq.connect('job_finished',  self.file_exp.refresh_clicked)
 
@@ -1926,6 +1947,24 @@ class AppWindow(Gtk.ApplicationWindow):
         self._paned_places.add2(self._paned_file_exp)
 
         self.add(self._paned_places)
+
+    def do_delete_event(self, event):
+        n_running_jobs = jq.n_running_jobs
+
+        d = Gtk.MessageDialog(transient_for=self,
+                              modal=True,
+                              buttons=Gtk.ButtonsType.OK_CANCEL)
+        if n_running_jobs > 0:
+            d.props.text = f'There are {n_running_jobs} running jobs.\n'
+        d.props.text += 'Are you sure you want to quit?'
+        response = d.run()
+        d.destroy()
+
+        if response == Gtk.ResponseType.OK:
+            jq.terminate_all_jobs()
+            return False
+
+        return True
 
     def _on_hidden_files_toggle(self, action: Gio.SimpleAction, value: bool):
         action.set_state(value)
@@ -1955,39 +1994,8 @@ class AppWindow(Gtk.ApplicationWindow):
         is_maximized = (event.new_window_state & Gdk.WindowState.MAXIMIZED != 0)
         config.win_maximized = is_maximized
 
-
-class Application(Gtk.Application):
-    def __init__(self):
-        super().__init__(application_id="org.example.myapp")
-        self.window = None
-
-    def do_startup(self):
-        Gtk.Application.do_startup(self)
-
-        actions = (
-            ("preferences", Preferences, ["<Control>p"]),
-            ("about", self._on_about, ["<Control>a"]),
-            ("quit", lambda _action, _param: self.quit(), ["<Control>q"])
-        )
-        for (name, callback, accels) in actions:
-            action = Gio.SimpleAction(name=name, parameter_type=None, enabled=True)
-            action.connect('activate', callback)
-            self.add_action(action)
-            self.set_accels_for_action("app." + name, accels)
-
-    def do_activate(self):
-        if not self.window:
-            self.window = AppWindow(application=self)
-        self.window.show_all()
-        self.window.present()
-
-    def do_shutdown(self):
-        config.cwd = self.window.file_exp.cwd
-        config.save()
-        Gtk.Application.do_shutdown(self)
-
     def _on_about(self, _action, _param):
-        about_dialog = Gtk.AboutDialog(transient_for=self.window, modal=True)
+        about_dialog = Gtk.AboutDialog(transient_for=self, modal=True)
         about_dialog.set_title('About')
         about_dialog.set_program_name('increasevol')
         about_dialog.set_comments('Increase video audio volume with ffmpeg')
@@ -2010,6 +2018,25 @@ class Application(Gtk.Application):
         about_dialog.present()
 
 
+class Application(Gtk.Application):
+    def __init__(self):
+        super().__init__(application_id="org.example.myapp")
+        self.window = None
+
+    def do_startup(self):
+        Gtk.Application.do_startup(self)
+
+    def do_activate(self):
+        if not self.window:
+            self.window = AppWindow(application=self)
+        self.window.show_all()
+        self.window.present()
+
+    def do_shutdown(self):
+        config.cwd = self.window.file_exp.cwd
+        config.save()
+        Gtk.Application.do_shutdown(self)
+
 def error_message(text: str, secondary_text: str, modal: bool = False):
     dialog = Gtk.MessageDialog(
         message_type=Gtk.MessageType.ERROR,
@@ -2025,31 +2052,27 @@ def error_message(text: str, secondary_text: str, modal: bool = False):
     else:
         dialog.show_all()
 
-
 def localtime_ns(ns_: int) -> struct_time_ns:
     """time.localtime() with nanoseconds"""
-    s, ns = divmod(int(ns_), int(10e8))
+    s, ns = divmod(int(ns_), int(1e9))
     st = time.localtime(s)
     return struct_time_ns(st.tm_year, st.tm_mon, st.tm_mday, st.tm_hour, st.tm_min, st.tm_sec,
                           st.tm_wday, st.tm_yday, st.tm_isdst, ns)
 
-
 def format_localtime_ns(st: struct_time_ns) -> str:
     if config.show_milliseconds:
-        return f'{st.tm_hour:02d}:{st.tm_min:02d}:{st.tm_sec:02d}.{str(st.tm_ns)[0:3]}'
+        return f'{st.tm_hour:02d}:{st.tm_min:02d}:{st.tm_sec:02d}.{round(st.tm_ns / 1e6):03}'
     else:
         return f'{st.tm_hour:02d}:{st.tm_min:02d}:{st.tm_sec:02d}'
 
-
 def format_time_ns(ns_: int) -> str:
-    s, ns = divmod(int(ns_), int(10e8))
+    s, ns = divmod(int(ns_), int(1e9))
     m, s = divmod(s, 60)
     h, m = divmod(m, 60)
     if config.show_milliseconds:
-        return f'{h:02d}:{m:02d}:{s:02d}.{str(ns)[0:3]}'
+        return f'{h:02d}:{m:02d}:{s:02d}.{round(ns / 1e6):03}'
     else:
         return f'{h:02d}:{m:02d}:{s:02d}'
-
 
 def check_prerequisites():
     """Check commands in config.required_cmd tuple are in PATH."""
@@ -2065,7 +2088,6 @@ def check_prerequisites():
                       secondary_text=missing_commands,
                       modal=True)
         raise SystemExit(missing_commands)
-
 
 if __name__ == '__main__':
     config = Configuration()
