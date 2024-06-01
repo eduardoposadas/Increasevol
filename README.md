@@ -24,13 +24,13 @@ ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:no
 ```
 to get the duration of the video. The second one is to launch the command:
 ```
-ffmpeg -i input_video.mkv -acodec mp3 -filter:a volume=3 -vcodec copy output_video.mkv
+ffmpeg -i input_video.mkv -map 0 -c:v copy -c:s copy -c:a mp3 -q:a 3 -filter:a volume=3.0 output_video.mkv
 ```
 which increases the audio volume of the input file. While ffmpeg is processing the video it displays on its standard output lines like:
 ```
-frame=12526 fps=695 q=31.0 size= 22272kB time=00:07:08.12 bitrate= 363.9kbits/s speed=27.8x
+size=   45210kB time=00:01:21.57 bitrate=4539.8kbits/s speed=22.9x
 ```
-indicating the proportion of the video that has already been processed. In the case of the example line, ffmpeg would have already processed 07:08.12 minutes of the video. With this data and the total duration of the video you can estimate how much time is left for the end of the video processing. This estimate is displayed in the job list to keep the user informed.
+indicating the proportion of the video that has already been processed. In the case of the example line, ffmpeg would have already processed 01:21.57 minutes of the video. With this data and the total duration of the video you can estimate how much time is left for the end of the video processing. This estimate is displayed in the job list to keep the user informed.
 
 Each ffmpeg process is launched using a class derived from the `ProcessLauncher` class. This class is a modification of [this](https://gist.github.com/fthiery/da43365ceeefff8a9e3d0dd83ec24af9) class and is responsible for reading the standard ffmpeg output asynchronously and sending a signal each time it has read a line with processing time data.
 
@@ -51,7 +51,7 @@ self._data_stream.read_upto_async(stop_chars='\r\n', # FIXME: This is not portab
 ```
 
 ## Installation
-It has been tested only on Ubuntu 22.04, but it should run on any current Linux distribution.
+It has been tested only on Ubuntu 24.04 and 22.04, but it should run on any current Linux distribution.
 
 In Ubuntu just copy the Python code [file](increasevol.py), give it run permissions and run it. Of course, it is necessary to have ffmpeg and ffprobe installed. Just run the following command in a terminal:
 ```
