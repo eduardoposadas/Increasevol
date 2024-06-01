@@ -1839,6 +1839,8 @@ class Preferences(Gtk.Window):
         config.temp_file_prefix = self._temp_file_prefix_entry.get_text()
         config.show_milliseconds = self._show_milliseconds_toggle.get_active()
 
+        return False
+
 
 # This XML is here to avoid another file. This is a "one file application" with no installation instructions.
 MENU_XML = """
@@ -2037,6 +2039,7 @@ class Application(Gtk.Application):
         config.save()
         Gtk.Application.do_shutdown(self)
 
+
 def error_message(text: str, secondary_text: str, modal: bool = False):
     dialog = Gtk.MessageDialog(
         message_type=Gtk.MessageType.ERROR,
@@ -2052,6 +2055,7 @@ def error_message(text: str, secondary_text: str, modal: bool = False):
     else:
         dialog.show_all()
 
+
 def localtime_ns(ns_: int) -> struct_time_ns:
     """time.localtime() with nanoseconds"""
     s, ns = divmod(int(ns_), int(1e9))
@@ -2059,11 +2063,13 @@ def localtime_ns(ns_: int) -> struct_time_ns:
     return struct_time_ns(st.tm_year, st.tm_mon, st.tm_mday, st.tm_hour, st.tm_min, st.tm_sec,
                           st.tm_wday, st.tm_yday, st.tm_isdst, ns)
 
+
 def format_localtime_ns(st: struct_time_ns) -> str:
     if config.show_milliseconds:
         return f'{st.tm_hour:02d}:{st.tm_min:02d}:{st.tm_sec:02d}.{round(st.tm_ns / 1e6):03}'
     else:
         return f'{st.tm_hour:02d}:{st.tm_min:02d}:{st.tm_sec:02d}'
+
 
 def format_time_ns(ns_: int) -> str:
     s, ns = divmod(int(ns_), int(1e9))
@@ -2073,6 +2079,7 @@ def format_time_ns(ns_: int) -> str:
         return f'{h:02d}:{m:02d}:{s:02d}.{round(ns / 1e6):03}'
     else:
         return f'{h:02d}:{m:02d}:{s:02d}'
+
 
 def check_prerequisites():
     """Check commands in config.required_cmd tuple are in PATH."""
@@ -2088,6 +2095,7 @@ def check_prerequisites():
                       secondary_text=missing_commands,
                       modal=True)
         raise SystemExit(missing_commands)
+
 
 if __name__ == '__main__':
     config = Configuration()
