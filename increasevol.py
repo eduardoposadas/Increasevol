@@ -1619,7 +1619,7 @@ class FfmpegLauncher(ProcessLauncher):
         super().__init__()
 
     def for_each_line(self, line: str):
-        if line.startswith('frame='):
+        if line.startswith('size=') or line.startswith('frame='):
             time_beg = line.find(' time=')
             time_beg += 6
             time_end = line.find(' ', time_beg)
