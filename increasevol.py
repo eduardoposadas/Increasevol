@@ -40,7 +40,8 @@ gi.require_version('Gtk', '3.0')  # noqa: E402
 gi.require_version('Gdk', '3.0')  # noqa: E402
 gi.require_version('Pango', '1.0')  # noqa: E402
 gi.require_version('GdkPixbuf', '2.0')  # noqa: E402
-from gi.repository import GObject, GLib, Gio, GdkPixbuf, Pango, Gdk, Gtk
+gi.require_version('Notify', '0.7')  # noqa: E402
+from gi.repository import GObject, GLib, Gio, GdkPixbuf, Pango, Gdk, Gtk, Notify
 
 # time.struct_time with nanoseconds
 struct_time_ns = namedtuple('struct_time_ns',
@@ -69,7 +70,8 @@ class Configuration:
         self._ignore_temp_files = True
         self._show_milliseconds = False
         # Do not change configuration options below this line
-        self._file = os.path.join(os.path.expanduser("~"), '.config', 'increasevol')  # FIXME: This is not portable.
+        self._program_name = os.path.splitext(os.path.basename(sys.argv[0]))[0]
+        self._file = os.path.join(os.path.expanduser("~"), '.config', self._program_name)  # FIXME: This is not portable.
         self._required_cmd = ('ffprobe', 'ffmpeg')
         self._cwd = GLib.get_home_dir()
         self._win_maximized = False
@@ -172,6 +174,10 @@ class Configuration:
             error_message(text='Error',
                           secondary_text='Error saving configuration',
                           modal=True)
+
+    @property
+    def program_name(self) -> str:
+        return self._program_name
 
     @property
     def file(self) -> str:
@@ -846,6 +852,8 @@ class Job(GObject.GObject):
                                              f'"{self._output_file_name}":\n\n{str(e)}', False)
                 finally:
                     self.emit('job_finished', self.file_name)
+                    Notify.Notification.new(summary = f'{os.path.basename(self.file_name)} finished succesfully',
+                                            icon = job_status_pixbuf[JobStatus.FINISHED]).show()
         else:
             # self._keep_original == False
             try:
@@ -866,6 +874,8 @@ class Job(GObject.GObject):
                                        False)
                 finally:
                     self.emit('job_finished', self.file_name)
+                    Notify.Notification.new(summary = f'{os.path.basename(self.file_name)} finished succesfully',
+                                            icon = job_status_pixbuf[JobStatus.FINISHED]).show()
 
     def _manage_error(self, _object, error: str, remove_temp_output: bool):
         self._ffprobe = None
@@ -881,6 +891,8 @@ class Job(GObject.GObject):
             except OSError:
                 pass
         self.emit('job_finished_with_error', self.file_name, error)
+        Notify.Notification.new(summary = f'{os.path.basename(self.file_name)} finished incorrectly',
+                                icon = job_status_pixbuf[JobStatus.FAILED]).show()
 
     def _manage_termination(self, _object):
         self._ffprobe = None
@@ -1624,10 +1636,14 @@ class FfmpegLauncher(ProcessLauncher):
             time_beg += 6
             time_end = line.find(' ', time_beg)
             time_str = line[time_beg:time_end]
-            h, m, s = time_str.split(':')
-            progress = int(h) * 3600 + int(m) * 60 + float(s)
-            progress_percent = progress * 100 / self._duration
-            self.emit('update_state', progress_percent)
+            try:
+                h, m, s = time_str.split(':')
+            except ValueError as e:
+                return
+            else:
+                progress = int(h) * 3600 + int(m) * 60 + float(s)
+                progress_percent = progress * 100 / self._duration
+                self.emit('update_state', progress_percent)
 
     def at_finalization(self):
         self.emit('finished')
@@ -1999,7 +2015,7 @@ class AppWindow(Gtk.ApplicationWindow):
     def _on_about(self, _action, _param):
         about_dialog = Gtk.AboutDialog(transient_for=self, modal=True)
         about_dialog.set_title('About')
-        about_dialog.set_program_name('increasevol')
+        about_dialog.set_program_name(config.program_name)
         about_dialog.set_comments('Increase video audio volume with ffmpeg')
         about_dialog.set_website('https://github.com/eduardoposadas/increasevol')
         about_dialog.set_website_label('Source Code at GitHub')
@@ -2100,6 +2116,7 @@ def check_prerequisites():
 if __name__ == '__main__':
     config = Configuration()
     check_prerequisites()
+    Notify.init(config.program_name)
     jq = JobsQueue()
     app = Application()
     app.run(sys.argv)
