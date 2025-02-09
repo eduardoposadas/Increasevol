@@ -63,6 +63,7 @@ class Configuration:
         self._output_suffix = '_Vol-inc'  # Only used if _keep_original == True
         self._use_all_cpus = True
         self._max_jobs = os.cpu_count()  # Only used if _use_all_cpus == False
+        self._sort_adding_dir = True
         self._file_expl_show_hidden_files = False
         self._file_expl_case_sensitive_sort = False
         self._file_expl_activate_on_single_click = True
@@ -121,6 +122,7 @@ class Configuration:
         self._output_suffix = temp_conf.get('DEFAULT', 'output_suffix', fallback=self._output_suffix)
         self._use_all_cpus = temp_conf.getboolean('DEFAULT', 'use_all_cpus', fallback=self._use_all_cpus)
         self._max_jobs = temp_conf.getint('DEFAULT', 'max_jobs', fallback=self._max_jobs)
+        self._sort_adding_dir = temp_conf.getboolean('DEFAULT', 'sort_adding_dir', fallback=self._sort_adding_dir)
         self._file_expl_show_hidden_files = temp_conf.getboolean('DEFAULT', 'file_explorer_show_hidden_files',
                                                                  fallback=self._file_expl_show_hidden_files)
         self._file_expl_case_sensitive_sort = temp_conf.getboolean('DEFAULT',
@@ -154,6 +156,7 @@ class Configuration:
             'output_suffix': self._output_suffix,
             'use_all_cpus': self._use_all_cpus,
             'max_jobs': self._max_jobs,
+            'sort_adding_dir': self._sort_adding_dir,
             'file_explorer_show_hidden_files': self._file_expl_show_hidden_files,
             'file_explorer_case_sensitive_sort': self._file_expl_case_sensitive_sort,
             'file_explorer_activate_on_single_click': self._file_expl_activate_on_single_click,
@@ -286,6 +289,14 @@ class Configuration:
     @max_jobs.setter
     def max_jobs(self, val: int):
         self._max_jobs = val
+
+    @property
+    def sort_adding_dir(self) -> bool:
+        return self._sort_adding_dir
+
+    @sort_adding_dir.setter
+    def sort_adding_dir(self, val: bool):
+        self._sort_adding_dir = val
 
     @property
     def paned_file_expl_position(self) -> int:
@@ -1384,6 +1395,8 @@ class JobsListWidget(Gtk.ScrolledWindow):
                     error_message(text='Not a video file', secondary_text=f'File:\n{path}')
             elif os.path.isdir(path):
                 for root, dirs, files in os.walk(path, topdown=False, followlinks=True):
+                    if config.sort_adding_dir:
+                        files = sorted(files)
                     for name in files:
                         if config.ignore_temp_files and name.startswith(config.temp_file_prefix):
                             continue
@@ -1752,9 +1765,20 @@ class Preferences(Gtk.Window):
         self._sep4.set_margin_bottom(self._separator_margin)
         self._grid.attach_next_to(self._sep4, self._use_all_cpus_label, Gtk.PositionType.BOTTOM, 2, 1)
 
+        self._sort_adding_dirs_label = Gtk.Label(label='Sort files adding directories: ')
+        self._sort_adding_dirs_toggle = Gtk.CheckButton(active=config.sort_adding_dir)
+        self._grid.attach_next_to(self._sort_adding_dirs_label, self._sep4, Gtk.PositionType.BOTTOM, 1, 1)
+        self._grid.attach_next_to(self._sort_adding_dirs_toggle, self._sort_adding_dirs_label, Gtk.PositionType.RIGHT,
+                                  1, 1)
+
+        self._sep5 = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        self._sep5.set_margin_top(self._separator_margin)
+        self._sep5.set_margin_bottom(self._separator_margin)
+        self._grid.attach_next_to(self._sep5, self._sort_adding_dirs_label, Gtk.PositionType.BOTTOM, 2, 1)
+
         self._keep_original_label = Gtk.Label(label='Keep Original: ')
         self._keep_original_toggle = Gtk.CheckButton(active=config.keep_original)
-        self._grid.attach_next_to(self._keep_original_label, self._sep4, Gtk.PositionType.BOTTOM, 1, 1)
+        self._grid.attach_next_to(self._keep_original_label, self._sep5, Gtk.PositionType.BOTTOM, 1, 1)
         self._grid.attach_next_to(self._keep_original_toggle, self._keep_original_label, Gtk.PositionType.RIGHT, 1, 1)
 
         self._output_prefix_label = Gtk.Label(label='Output prefix: ')
@@ -1767,14 +1791,14 @@ class Preferences(Gtk.Window):
         self._grid.attach_next_to(self._output_suffix_label, self._output_prefix_label, Gtk.PositionType.BOTTOM, 1, 1)
         self._grid.attach_next_to(self._output_suffix_entry, self._output_suffix_label, Gtk.PositionType.RIGHT, 1, 1)
 
-        self._sep5 = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
-        self._sep5.set_margin_top(self._separator_margin)
-        self._sep5.set_margin_bottom(self._separator_margin)
-        self._grid.attach_next_to(self._sep5, self._output_suffix_label, Gtk.PositionType.BOTTOM, 2, 1)
+        self._sep6 = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        self._sep6.set_margin_top(self._separator_margin)
+        self._sep6.set_margin_bottom(self._separator_margin)
+        self._grid.attach_next_to(self._sep6, self._output_suffix_label, Gtk.PositionType.BOTTOM, 2, 1)
 
         self._ignore_temp_files_label = Gtk.Label(label='Ignore temporal files: ')
         self._ignore_temp_files_toggle = Gtk.CheckButton(active=config.ignore_temp_files)
-        self._grid.attach_next_to(self._ignore_temp_files_label, self._sep5, Gtk.PositionType.BOTTOM, 1, 1)
+        self._grid.attach_next_to(self._ignore_temp_files_label, self._sep6, Gtk.PositionType.BOTTOM, 1, 1)
         self._grid.attach_next_to(self._ignore_temp_files_toggle, self._ignore_temp_files_label, Gtk.PositionType.RIGHT, 1, 1)
 
         self._temp_file_prefix_label = Gtk.Label(label='Temporal file prefix: ')
@@ -1848,6 +1872,7 @@ class Preferences(Gtk.Window):
         config.audio_encoder = self._audio_encoder_combo.get_active_text()
         config.audio_quality = int(self._audio_quality_scale.get_value())
         config.use_all_cpus = self._use_all_cpus_toggle.get_active()
+        config.sort_adding_dir = self._sort_adding_dirs_toggle.get_active()
         config.keep_original = self._keep_original_toggle.get_active()
         config.output_prefix = self._output_prefix_entry.get_text()
         config.output_suffix = self._output_suffix_entry.get_text()
